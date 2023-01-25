@@ -1,5 +1,6 @@
 """
 
+- https://web.stanford.edu/class/archive/cs/cs106b/cs106b.1126/handouts/220%20Huffman%20Encoding.pdf
 - http://www.cs.bc.edu/~signoril/cs102/projects/fall2007/project7.html
 - https://rosettacode.org/wiki/Huffman_coding#Python
 
@@ -25,7 +26,12 @@ from collections import defaultdict, deque
 from enum import Enum
 
 
-WORD_SIZE = 2
+WORD_SIZE = 1
+
+# TODO: Choose dynamically based on input.
+# This is to ensure we stop decoding instead of having to pad the
+# output.
+PSEUDO_EOF = chr(4)  # End Of Transmission
 
 
 class Direction(Enum):
@@ -66,6 +72,11 @@ def get_huffman_tree(text: str) -> TreeNode:
     for char in text:
         counts[char] += 1
 
+    if PSEUDO_EOF in counts:
+        raise RuntimeError("Pseudo-EOF is actually in given text.")
+    else:
+        counts[PSEUDO_EOF] += 1
+
     # create TreeNode per character
     # sort TreeNode list by counts
     # Use heap
@@ -94,8 +105,6 @@ def get_huffman_tree(text: str) -> TreeNode:
     return heap[0][1]
 
 
-
-# TODO: make left/right 0/1 config param.
 # Use graph traversal to create code
 def construct_code(root: TreeNode) -> dict[str, str]:
     def helper(root: TreeNode) -> None:
@@ -114,7 +123,6 @@ def construct_code(root: TreeNode) -> dict[str, str]:
             codeword.append(str(Direction.RIGHT.value))
             helper(root.right)
             codeword.pop()
-
 
     ans = {}
     codeword = []
@@ -208,6 +216,7 @@ def run_tests():
     answer = {'B': '111', 'D': '110', 'C': '10', 'A': '0'}
     assert huffman_code == answer
 
+    # This was without the PSEUDO_EOF
     text = "aaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbcccccccccccccccccccddddddddddddddddddddcba\n"
     fsm = [
         [0, 'd'], [0, 'a'], [0, 'c'], [3, ''],
@@ -221,40 +230,36 @@ def run_tests():
 # TODO: work with bytearray instead? Or how do I make it work for
 # large streams?
 def decode(code: bytes, fsm: list) -> str:
-    state = 0
+    # TODO: Possibly just hardcoding is clearer.
+    # Dynamically create bit masks based on WORD_SIZE. For example,
+    # given WORD_SIZE=2 then we want to end up with the masks
+    # 11000000, 00110000, 00001100, 00000011
+    shifts = list(range(8-WORD_SIZE, -1, -WORD_SIZE))
+    base_mask = 2**(WORD_SIZE - 1)
+    base_mask = base_mask ^ (base_mask - 1)
+    masks = [base_mask << shift for shift in shifts]
 
-    # ans = []
-    # for byte in code:
-    #     idx = (state * 2**WORD_SIZE) + byte >> 4
-    #     print(idx)
-    #     state, invalid, emit = fsm[idx]
-
-    #     if invalid:
-    #         raise RuntimeError("Invalid code received for given FSM.")
-
-    #     if emit:
-    #         ans.append(emit)
-
-    #     idx = (state * 2**WORD_SIZE) + byte & 0x0F
-    #     state, invalid, emit = fsm[idx]
-
-    #     if invalid:
-    #         raise RuntimeError("Invalid code received for given FSM.")
-
-    #     if emit:
-    #         ans.append(emit)
+    # TODO: These print lines are actually pretty usefull for
+    # debugging. Maybe allow a DEBUG = True param?. Convert to logging
+    # module probably.
     ans = []
+    state = 0
     for byte in code:
-        print(byte)
-        for mask, shift in zip([3 << 6, 3 << 4, 3 << 2, 3], [6, 4, 2, 0]):
-            idx = (state * 2**WORD_SIZE) + (byte & mask) >> shift
-            print(idx)
+        # print()
+        # print(byte, byte.to_bytes(1, "little"), bin(byte)[2:].rjust(8, "0"))
+
+        # Feed WORD_SIZE number of bits to the FSM.
+        for mask, shift in zip(masks, shifts):
+            idx = (state * 2**WORD_SIZE) + ((byte & mask) >> shift)
             state, invalid, emit = fsm[idx]
+            # print((state, idx), end='->')
 
             if invalid:
                 raise RuntimeError("Invalid code received for given FSM.")
 
             if emit:
+                if emit == PSEUDO_EOF:
+                    return "".join(ans)
                 ans.append(emit)
 
     return "".join(ans)
@@ -268,20 +273,34 @@ def main():
 
     # TODO: get fsm to process bytes for decoding
     fsm = get_fsm(huffman_tree, word_size=WORD_SIZE)
-    pprint.pprint(fsm)
 
     huffman_code = construct_code(huffman_tree)
     encoding = []
     for char in text:
         encoding.append(huffman_code[char])
+    encoding.append(huffman_code[PSEUDO_EOF])
     encoding = "".join(encoding)
+
+    # TODO: Last byte could be wrong as encoding isn't always a
+    # multiple of 8.
+    byte_encoding = bytearray()
+    for i in range(8, len(encoding), 8):
+        byte = encoding[i-8:i]
+        byte_encoding.append(int(byte, 2))
 
     # To be fair, the huffman code would have to be stored as well. But
     # this becomes negligible as the initial file contains more text,
     # thus we leave it out.
     print(text)
-    print(huffman_code)
     print(encoding)
+    print(len(encoding) % 8)
+    print()
+    print(byte_encoding)
+    print()
+    print(huffman_code)
+    print()
+    pprint.pprint(fsm)
+    print()
 
     # TODO: Deal with proper binary encoding.
     # NOTE: Important that a leading 0 is also included, or we can't
@@ -291,19 +310,24 @@ def main():
     # this padding integer to the front again so that you know what
     # padding was used when decoding the file and can strip that of
     # the encoding.
-    length = len(encoding) // 8 + 1  # math.ceil
-    # TODO: WRONG! Inserting zeros at the front will lead to wrong
-    # decoding.
-    output = int(encoding, 2).to_bytes(length, "big")
-    print(output)
-    with open("file_binary.raw", "ba") as f:
-        # TODO: Use struct module instead. Better to chunk into smaller
-        # integers then using 1 very large one (not feasible for long
-        # texts).
-        f.write(output)
+    # length = len(encoding) // 8 + 1  # math.ceil
+    # # TODO: WRONG! Inserting zeros at the front will lead to wrong
+    # # decoding.
+    # output = int(encoding, 2).to_bytes(length, "big")
+    # print(output)
+    with open("file_binary.raw", "bw") as f:
+        f.write(byte_encoding)
 
-    output = decode(code=output, fsm=fsm)
+    with open("file_binary.raw", "br") as f:
+        byte_encoding_from_file = f.read()
+
+
+    output = decode(code=byte_encoding, fsm=fsm)
+    assert output == text
+    output = decode(code=byte_encoding_from_file, fsm=fsm)
+    assert output == text
     print(output)
+
 
 
 if __name__ == "__main__":
