@@ -26,15 +26,19 @@ from collections import defaultdict, deque
 from enum import Enum
 
 
-WORD_SIZE = 1
-
 # TODO: Choose dynamically based on input.
 # This is to ensure we stop decoding instead of having to pad the
 # output.
 PSEUDO_EOF = chr(4)  # End Of Transmission
 
+# TODO: Can't we actually take values like 16 as well? Just need to
+# loop differently through the bytes when decoding, I guess.
+# Number of bits to process at once using a Finite State Machine (FSM).
+DECODER_WORD_SIZE = 4
+
 
 class Direction(Enum):
+    """Code values for directions (left or right) in Huffman tree."""
     LEFT = 0
     RIGHT = 1
 
@@ -43,73 +47,80 @@ class TreeNode:
     def __init__(
         self,
         char: str = "",
+        freq: int = 0,
         left: t.Optional["TreeNode"] = None,
         right: t.Optional["TreeNode"] = None,
     ) -> None:
         self.char = char
+        self.freq = freq
         self.left = left
         self.right = right
-        self.idx = None
+        self.fsm_state: t.Optional[int] = None
 
-    def assign_index(self, idx: int) -> None:
-        self.idx = idx
-
-    def __lt__(self, _):
-        # No ordering, just default to self.
-        return self
+    def __lt__(self, other):
+        return self.freq < other.freq
 
     def __str__(self):
-        return f"TreeNode<{self.char}>"
+        return self.__repr__()
 
     def __repr__(self):
-        return self.__str__()
+        # Wrap self.char in repr() as it could be "\n" or similar.
+        return (
+            "TreeNode("
+                f"char={repr(self.char)}, freq={self.freq},"
+                f" left={self.left}, right={self.right}"
+            ")"
+        )
 
 
-# TODO: coding should be bytes not string
-def get_huffman_tree(text: str) -> TreeNode:
-    # counts
-    counts = defaultdict(int)
+def _get_freq_table(text: str) -> dict[str, int]:
+    freq_table = defaultdict(int)
     for char in text:
-        counts[char] += 1
+        freq_table[char] += 1
 
-    if PSEUDO_EOF in counts:
+    freq_table[PSEUDO_EOF] += 1
+    if freq_table[PSEUDO_EOF] > 1:
         raise RuntimeError("Pseudo-EOF is actually in given text.")
-    else:
-        counts[PSEUDO_EOF] += 1
 
-    # create TreeNode per character
-    # sort TreeNode list by counts
-    # Use heap
+    return freq_table
+
+
+def _get_huffman_tree(freq_table: dict[str, int]) -> TreeNode:
+    """Constructs a Huffman tree."""
     heap = []
-    for char in counts:
-        node = TreeNode(char=char)
-        # TODO: namedtuple
-        heap.append((counts[char], node))
+    for char in freq_table:
+        node = TreeNode(char=char, freq=freq_table[char])
+        heap.append(node)
 
-    # Build Tree
     heapq.heapify(heap)
     while len(heap) != 1:
-        smallest1, smallest2 = heapq.heappop(heap), heapq.heappop(heap)
+        least_freq1, least_freq2 = heapq.heappop(heap), heapq.heappop(heap)
         heapq.heappush(
             heap,
-            (
-                smallest1[0] + smallest2[0],  # count
-                TreeNode(
-                    left=smallest1[1],
-                    right=smallest2[1],
-                ),
+            TreeNode(
+                freq=least_freq1.freq + least_freq2.freq,
+                left=least_freq1,
+                right=least_freq2,
             ),
         )
 
-    # Don't lose root node
-    return heap[0][1]
+    # Return root node.
+    return heap[0]
 
 
-# Use graph traversal to create code
-def construct_code(root: TreeNode) -> dict[str, str]:
+def _get_huffman_code(root: TreeNode) -> dict[str, str]:
+    """Constructs Huffman code given a Huffman tree.
+
+    Returns:
+        Maps a character in the original text (which corresponds to a leaf
+        node in the Huffman tree) to its corresponding code, where the code
+        is represented as a string of zeros "0" and ones "1".
+
+    """
     def helper(root: TreeNode) -> None:
         nonlocal ans, codeword
 
+        # Reached a leaf node.
         if root.left is None and root.right is None:
             ans[root.char] = "".join(codeword)
             return
@@ -130,112 +141,176 @@ def construct_code(root: TreeNode) -> dict[str, str]:
     return ans
 
 
-def get_huffman_coding(text: str) -> dict[str, str]:
-    return construct_code(get_huffman_tree(text))
+# TODO: Don't require text to be able to fit into memory. Work with
+# streams instead.
+def encode(text: str) -> bytearray:
+    freq_table = _get_freq_table(text)
+    huffman_tree = _get_huffman_tree(freq_table)
+    huffman_code = _get_huffman_code(huffman_tree)
+
+    # TODO: store freq table as well.
+    encoding = []
+    for char in text:
+        encoding.append(huffman_code[char])
+    encoding.append(huffman_code[PSEUDO_EOF])
+    encoding = "".join(encoding)
+
+    byte_encoding = bytearray()
+    for i in range(8, len(encoding), 8):
+        byte = encoding[i-8:i]
+        byte_encoding.append(int(byte, 2))
+
+    return byte_encoding
 
 
-def get_fsm(root: TreeNode, word_size: int = WORD_SIZE) -> list:
-    if word_size not in [1, 2, 4]:
-        raise ValueError("Possible values for word_size are: 1, 2 or 4.")
+def _get_fsm_decoder(root: TreeNode, word_size: int = DECODER_WORD_SIZE) -> list:
+    """Gets an FSM that can be used as a Huffman decoder.
 
-    # Assign index to each node in the Tree. Need to do it before
-    # processing because a state transition could take you to a state
-    # that wasn't seen before (when going top-down in the tree).
-    idx = 0
-    q: t.Deque[t.Optional[TreeNode]] = deque([root])
+    Each internal node of the Huffman tree (including the root node)
+    will become a state in the FSM. For each state we consider all
+    possible transitions based on the specified `word_size`. For
+    example, when `word_size=4` the possible transitions are the bit
+    sequences: `00`, `01`, `10` and `11`.
+
+    TODO:
+        A possible performance improvement (at the cost of memory) would
+        be to generate the FSM for increasing `word_size`s (as power of
+        2) until the required `word_size` is reached, e.g. generate FSM
+        for `word_size=2` and use that FSM to generate for
+        `word_size=4`, etc.
+
+    Returns:
+        A single list containing all transitions for all states defining
+        the FSM.
+
+        Each state will be a sequence of (1 << word_size) number of
+        tuples. For example, if `word_size=2` then the FSM will be:
+
+        [
+            # State 0, which is the root of the Huffman tree
+            (state_after_transition, is_invalid_transition, to_emit),
+            (state_after_transition, is_invalid_transition, to_emit),
+            (state_after_transition, is_invalid_transition, to_emit),
+            (state_after_transition, is_invalid_transition, to_emit),
+
+            # State 1
+            ...
+        ]
+
+        Thus indexing into the FSM can be done using:
+
+            word_size*curr_state + transition
+
+    """
+    if word_size not in [1, 2, 4, 8]:
+        raise ValueError("Possible values for word_size are: 1, 2, 4 or 8.")
+
+    # Create all states for the FSM. This can't be done dynamically in
+    # the FSM creation algorithm, because transitions could take you to
+    # states that aren't visited yet (in a BFS manner).
+    state = 0
+    q: t.Deque[TreeNode] = deque([root])
     while q:
         node = q.popleft()
-        if node is None:
+
+        if node.left is not None:
+            q.append(node.left)
+        if node.right is not None:
+            q.append(node.right)
+
+        # In the FSM, only internal Huffman tree nodes will becomes
+        # states.
+        if node.left is None and node.right is None:
             continue
+        else:
+            node.fsm_state = state
+            state += 1
+
+
+    def get_individual_bits(num: int) -> t.Generator[t.Literal[0, 1], None, None]:
+        """Get individal bits, left to right, from a given number.
+
+        For example, given `num=6` and `word_size=4`, then the binary
+        representation would be `0110` and thus the individual bits are
+        `0` -> `1` -> `1` -> `0`.
+
+        """
+        nonlocal word_size
+
+        for bit_idx in range(word_size-1, -1, -1):
+            yield num & (1 << bit_idx)  # type: ignore
+
+
+    # Generate all transitions for the FSM, where a transition is
+    # defined as:
+    #   (state_after_transition, is_invalid_transition, to_emit)
+    fsm = []
+    q: t.Deque[TreeNode] = deque([root])
+    num_transitions = 1 << word_size
+    while q:
+        node = q.popleft()
+
+        if node.left is not None:
+            q.append(node.left)
+        if node.right is not None:
+            q.append(node.right)
+
+        # Only consider internal nodes of the tree.
         if node.left is None and node.right is None:
             continue
 
-        node.assign_index(idx)
-        idx += 1
-        q.extend([node.left, node.right])
+        for transition in range(num_transitions):
+            node_after_transition = node
+            is_invalid_transition = False
+            # The character(s) to be emitted for the transition.
+            to_emit = ""
 
-
-    bits_to_explore = [2**i for i in range(word_size-1, -1, -1)]
-    # Create FSM.
-    fsm = []
-    q2: t.Deque[TreeNode] = deque([root])
-    while q2:
-        state = q2.popleft()
-
-        # Only consider internal nodes of the tree.
-        if state.left is None and state.right is None:
-            continue
-
-        if state.left is not None:
-            q2.append(state.left)
-        if state.right is not None:
-            q2.append(state.right)
-
-        for transition in range(2**word_size):
-            new_state = state
-            emit = ""
-            invalid = False
-
-            # Explore first, second, third, fourth bit
-            for mask in bits_to_explore:
-                bit = transition & mask
-
-                if bit == Direction.LEFT.value:
-                    new_state = new_state.left
+            for bit_value in get_individual_bits(transition):
+                if bit_value == Direction.LEFT.value:
+                    node_after_transition = node_after_transition.left
                 else:
-                    new_state = new_state.right
+                    node_after_transition = node_after_transition.right
 
-                # Invalid code.
-                # The given code said to transition to the right, but
-                # there is no tree defined. Thus we have received an
-                # invalid code for this tree.
-                if new_state is None:
-                    invalid = True
+                # The given transition can't be done from the current
+                # state. This could happen if the FSM is asked to decode
+                # an invalid sequence of bytes, i.e. one that isn't
+                # encoded using the given Huffman tree.
+                if node_after_transition is None:
+                    is_invalid_transition = True
                     break
 
                 # Encountered a leaf node, so transition back to root.
-                if new_state.left is None and new_state.right is None:
-                    emit += new_state.char
-                    new_state = root
+                if (
+                    node_after_transition.left is None
+                    and node_after_transition.right is None
+                ):
+                    to_emit += node_after_transition.char
+                    node_after_transition = root
 
             # Add transition to FSM.
-            # [state transitioned to, invalid, chars to emit]
-            # Invalid means that the given transition wasn't valid for
-            # the code.
-            if invalid:
-                fsm.append([None, invalid, emit])
+            if is_invalid_transition:
+                fsm.append([None, is_invalid_transition, to_emit])
             else:
-                fsm.append([new_state.idx, invalid, emit])  # type: ignore
+                fsm.append(
+                    [
+                        node_after_transition.fsm_state,  # type: ignore
+                        is_invalid_transition,
+                        to_emit
+                    ]
+                )
 
     return fsm
-
-
-def run_tests():
-    text = "AABACDACA"
-    huffman_code = get_huffman_coding(text)
-    answer = {'B': '111', 'D': '110', 'C': '10', 'A': '0'}
-    assert huffman_code == answer
-
-    # This was without the PSEUDO_EOF
-    text = "aaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbcccccccccccccccccccddddddddddddddddddddcba\n"
-    fsm = [
-        [0, 'd'], [0, 'a'], [0, 'c'], [3, ''],
-        [1, 'd'], [2, 'd'], [1, 'a'], [2, 'a'],
-        [1, 'c'], [2, 'c'], [0, '\n'], [0, 'b'],
-        [1, '\n'], [2, '\n'], [1, 'b'], [2, 'b']
-    ]
-    assert get_fsm(get_huffman_tree(text), word_size=2) == fsm
 
 
 # TODO: work with bytearray instead? Or how do I make it work for
 # large streams?
 def decode(code: bytes, fsm: list) -> str:
     # TODO: Possibly just hardcoding is clearer.
-    # Dynamically create bit masks based on WORD_SIZE. For example,
-    # given WORD_SIZE=2 then we want to end up with the masks
+    # Dynamically create bit masks based on DECODER_WORD_SIZE. For example,
+    # given DECODER_WORD_SIZE=2 then we want to end up with the masks
     # 11000000, 00110000, 00001100, 00000011
-    shifts = list(range(8-WORD_SIZE, -1, -WORD_SIZE))
-    base_mask = 2**(WORD_SIZE - 1)
+    shifts = list(range(8-DECODER_WORD_SIZE, -1, -DECODER_WORD_SIZE))
+    base_mask = 2**(DECODER_WORD_SIZE - 1)
     base_mask = base_mask ^ (base_mask - 1)
     masks = [base_mask << shift for shift in shifts]
 
@@ -248,9 +323,9 @@ def decode(code: bytes, fsm: list) -> str:
         # print()
         # print(byte, byte.to_bytes(1, "little"), bin(byte)[2:].rjust(8, "0"))
 
-        # Feed WORD_SIZE number of bits to the FSM.
+        # Feed DECODER_WORD_SIZE number of bits to the FSM.
         for mask, shift in zip(masks, shifts):
-            idx = (state * 2**WORD_SIZE) + ((byte & mask) >> shift)
+            idx = (state * 2**DECODER_WORD_SIZE) + ((byte & mask) >> shift)
             state, invalid, emit = fsm[idx]
             # print((state, idx), end='->')
 
@@ -258,7 +333,7 @@ def decode(code: bytes, fsm: list) -> str:
                 raise RuntimeError("Invalid code received for given FSM.")
 
             if emit:
-                if emit == PSEUDO_EOF:
+                if PSEUDO_EOF in emit:
                     return "".join(ans)
                 ans.append(emit)
 
@@ -268,65 +343,63 @@ def decode(code: bytes, fsm: list) -> str:
 def main():
     with open("file_text.txt", "r") as f:
         text = f.read()
+    with open("hamlet.txt", "r") as f:
+        text = f.read()
 
-    huffman_tree = get_huffman_tree(text)
+    freq_table = _get_freq_table(text)
+    huffman_tree = _get_huffman_tree(freq_table)
 
     # TODO: get fsm to process bytes for decoding
-    fsm = get_fsm(huffman_tree, word_size=WORD_SIZE)
+    fsm = _get_fsm_decoder(huffman_tree, word_size=DECODER_WORD_SIZE)
 
-    huffman_code = construct_code(huffman_tree)
-    encoding = []
-    for char in text:
-        encoding.append(huffman_code[char])
-    encoding.append(huffman_code[PSEUDO_EOF])
-    encoding = "".join(encoding)
+    byte_encoding = encode(text)
 
-    # TODO: Last byte could be wrong as encoding isn't always a
-    # multiple of 8.
-    byte_encoding = bytearray()
-    for i in range(8, len(encoding), 8):
-        byte = encoding[i-8:i]
-        byte_encoding.append(int(byte, 2))
+    # print(text)
+    # print(encoding)
+    # print(len(encoding) % 8)
+    # print()
+    # print(byte_encoding)
+    # print()
+    # print(huffman_code)
+    # print()
+    # pprint.pprint(fsm)
+    # print()
 
-    # To be fair, the huffman code would have to be stored as well. But
-    # this becomes negligible as the initial file contains more text,
-    # thus we leave it out.
-    print(text)
-    print(encoding)
-    print(len(encoding) % 8)
-    print()
-    print(byte_encoding)
-    print()
-    print(huffman_code)
-    print()
-    pprint.pprint(fsm)
-    print()
-
-    # TODO: Deal with proper binary encoding.
-    # NOTE: Important that a leading 0 is also included, or we can't
-    # decode.
-    # Solution: Pad with "1"s at the left side of the encoding so that
-    # you end up with a multiple of 8 for the total encoding. Then add
-    # this padding integer to the front again so that you know what
-    # padding was used when decoding the file and can strip that of
-    # the encoding.
-    # length = len(encoding) // 8 + 1  # math.ceil
-    # # TODO: WRONG! Inserting zeros at the front will lead to wrong
-    # # decoding.
-    # output = int(encoding, 2).to_bytes(length, "big")
-    # print(output)
     with open("file_binary.raw", "bw") as f:
         f.write(byte_encoding)
 
     with open("file_binary.raw", "br") as f:
         byte_encoding_from_file = f.read()
 
-
+    # TODO: Actually... the freq table needs to be included in the
+    # encoding as well.
+    # - 1 byte for the number of chars that will follow
+    # - 1 byte to contain the char
+    # - 4 bytes to contain the count
     output = decode(code=byte_encoding, fsm=fsm)
     assert output == text
     output = decode(code=byte_encoding_from_file, fsm=fsm)
     assert output == text
-    print(output)
+    # print(output)
+
+
+def run_tests():
+    text = "AABACDACA"
+    freq_table = _get_freq_table(text)
+    huffman_tree = _get_huffman_tree(freq_table)
+    huffman_code = _get_huffman_code(huffman_tree)
+    answer = {'B': '111', 'D': '110', 'C': '10', 'A': '0'}
+    assert huffman_code == answer
+
+    # This was without the PSEUDO_EOF
+    text = "aaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbcccccccccccccccccccddddddddddddddddddddcba\n"
+    fsm = [
+        [0, 'd'], [0, 'a'], [0, 'c'], [3, ''],
+        [1, 'd'], [2, 'd'], [1, 'a'], [2, 'a'],
+        [1, 'c'], [2, 'c'], [0, '\n'], [0, 'b'],
+        [1, '\n'], [2, '\n'], [1, 'b'], [2, 'b']
+    ]
+    assert _get_fsm_decoder(_get_huffman_tree(text), word_size=2) == fsm
 
 
 
