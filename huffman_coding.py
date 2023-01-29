@@ -1,3 +1,41 @@
+"""Huffman encoding and decoding.
+
+`encode()` encodes a given stream fully such that `decode()` can decode
+it (without needing the original text, because the frequency table is
+stored in the encoding as well). The encoding format is as follows:
+
+    - 1 byte: the number of characters in the frequency table
+    - X bytes: where X=5*value_of_previous_byte. These bytes store the
+      frequency table using the schema given by
+      `FREQ_TABLE_ENCODING_SCHEMA`.
+    - Y bytes: the remaining bytes containing the encoded text.
+
+To make sure the encoding of the text is "byte-aligned" we make use of a
+`PSEUDO_EOF`. Once the `PSEUDO_EOF` is read during decoding, we stop
+decoding further. Decoding is done using a Finite State Machine (FSM)
+with a configurable `DECODER_WORD_SIZE` that determines the number of
+transitions per state (`num_transitions = 1 << DECODER_WORD_SIZE`). This
+makes decoding considerably faster as we no longer have to decode
+bit-by-bit but can instead (at once) decode `DECODER_WORD_SIZE` number
+of bits.
+
+Todo:
+    - Working with larger than memory input text.
+    - The `DECODER_WORD_SIZE` can not be larger than 8 currently,
+      because we decode byte-by-byte. To allow for larger values of
+      `DECODER_WORD_SIZE` we would have to dynamically change the number
+      of bytes that are read for decoding.
+    - If `PSEUDO_EOF` is actually in the given text (to be encoded),
+      then an error is raised. Although unlikely that the `PSEUDO_EOF`
+      is in the text (currently a static uncommon character is chosen),
+      if it is, then we error out. Alternatively, a new `PSEUDO_EOF` can
+      be chosen (dynamically) that is not in the text. Only if all 256
+      ASCII characters are in the text, then we error out.
+
+"""
+
+
+
 """
 
 - https://web.stanford.edu/class/archive/cs/cs106b/cs106b.1126/handouts/220%20Huffman%20Encoding.pdf
@@ -19,22 +57,32 @@ Unrolling an FSM:
 - https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/asplos302-mytkowicz.pdf
 
 """
+import itertools
 import heapq
 import pprint
+import struct
 import typing as t
 from collections import defaultdict, deque
 from enum import Enum
 
 
-# TODO: Choose dynamically based on input.
 # This is to ensure we stop decoding instead of having to pad the
 # output.
 PSEUDO_EOF = chr(4)  # End Of Transmission
 
-# TODO: Can't we actually take values like 16 as well? Just need to
-# loop differently through the bytes when decoding, I guess.
 # Number of bits to process at once using a Finite State Machine (FSM).
+# Recommend value is 4 as it has a good trade-off between speed and
+# memory consumption. In addition, for large values it takes a
+# considerable amount of time to build up the FSM.
 DECODER_WORD_SIZE = 4
+
+# Decoder flags.
+DECODER_FAIL = 1
+DECODER_COMPLETE = (1 << 1)
+
+# Encoding schema using the `struct` module.
+# To use, do: `eval(FREQ_TABLE_ENCODING_SCHEMA.format(num_chars=...))`
+FREQ_TABLE_ENCODING_SCHEMA = "'<' + {num_chars} * 'cI'"
 
 
 class Direction(Enum):
@@ -141,29 +189,10 @@ def _get_huffman_code(root: TreeNode) -> dict[str, str]:
     return ans
 
 
-# TODO: Don't require text to be able to fit into memory. Work with
-# streams instead.
-def encode(text: str) -> bytearray:
-    freq_table = _get_freq_table(text)
-    huffman_tree = _get_huffman_tree(freq_table)
-    huffman_code = _get_huffman_code(huffman_tree)
-
-    # TODO: store freq table as well.
-    encoding = []
-    for char in text:
-        encoding.append(huffman_code[char])
-    encoding.append(huffman_code[PSEUDO_EOF])
-    encoding = "".join(encoding)
-
-    byte_encoding = bytearray()
-    for i in range(8, len(encoding), 8):
-        byte = encoding[i-8:i]
-        byte_encoding.append(int(byte, 2))
-
-    return byte_encoding
-
-
-def _get_fsm_decoder(root: TreeNode, word_size: int = DECODER_WORD_SIZE) -> list:
+def _get_fsm_decoder(
+    root: TreeNode,
+    word_size: int = DECODER_WORD_SIZE
+) -> list[tuple[int, int, str]]:
     """Gets an FSM that can be used as a Huffman decoder.
 
     Each internal node of the Huffman tree (including the root node)
@@ -172,7 +201,7 @@ def _get_fsm_decoder(root: TreeNode, word_size: int = DECODER_WORD_SIZE) -> list
     example, when `word_size=4` the possible transitions are the bit
     sequences: `00`, `01`, `10` and `11`.
 
-    TODO:
+    Todo:
         A possible performance improvement (at the cost of memory) would
         be to generate the FSM for increasing `word_size`s (as power of
         2) until the required `word_size` is reached, e.g. generate FSM
@@ -186,20 +215,23 @@ def _get_fsm_decoder(root: TreeNode, word_size: int = DECODER_WORD_SIZE) -> list
         Each state will be a sequence of (1 << word_size) number of
         tuples. For example, if `word_size=2` then the FSM will be:
 
-        [
-            # State 0, which is the root of the Huffman tree
-            (state_after_transition, is_invalid_transition, to_emit),
-            (state_after_transition, is_invalid_transition, to_emit),
-            (state_after_transition, is_invalid_transition, to_emit),
-            (state_after_transition, is_invalid_transition, to_emit),
+            [
+                # State 0, which is the root of the Huffman tree
+                (state_after_transition, flags, to_emit),
+                (state_after_transition, flags, to_emit),
+                (state_after_transition, flags, to_emit),
+                (state_after_transition, flags, to_emit),
 
-            # State 1
-            ...
-        ]
+                # State 1
+                ...
+            ]
+
+        where `flags` is an integer denoting whether `DECODER_FAIL`
+        and/or `DECODER_COMPLETE` has occurred.
 
         Thus indexing into the FSM can be done using:
 
-            word_size*curr_state + transition
+            curr_state * (1 << word_size) + transition
 
     """
     if word_size not in [1, 2, 4, 8]:
@@ -261,9 +293,9 @@ def _get_fsm_decoder(root: TreeNode, word_size: int = DECODER_WORD_SIZE) -> list
 
         for transition in range(num_transitions):
             node_after_transition = node
-            is_invalid_transition = False
             # The character(s) to be emitted for the transition.
             to_emit = ""
+            flags = 0
 
             for bit_value in get_individual_bits(transition):
                 if bit_value == Direction.LEFT.value:
@@ -276,7 +308,7 @@ def _get_fsm_decoder(root: TreeNode, word_size: int = DECODER_WORD_SIZE) -> list
                 # an invalid sequence of bytes, i.e. one that isn't
                 # encoded using the given Huffman tree.
                 if node_after_transition is None:
-                    is_invalid_transition = True
+                    flags |= DECODER_FAIL
                     break
 
                 # Encountered a leaf node, so transition back to root.
@@ -284,86 +316,141 @@ def _get_fsm_decoder(root: TreeNode, word_size: int = DECODER_WORD_SIZE) -> list
                     node_after_transition.left is None
                     and node_after_transition.right is None
                 ):
-                    to_emit += node_after_transition.char
+                    if node_after_transition.char == PSEUDO_EOF:
+                        flags |= DECODER_COMPLETE
+                        # Once the PSEUDO_EOF is read, we no longer
+                        # decode. If we don't, then `to_emit` could
+                        # contain characters that weren't in the
+                        # encoded text.
+                        break
+                    else:
+                        to_emit += node_after_transition.char
+
                     node_after_transition = root
 
             # Add transition to FSM.
-            if is_invalid_transition:
-                fsm.append([None, is_invalid_transition, to_emit])
+            if flags & DECODER_FAIL:
+                fsm.append((None, flags, to_emit))
             else:
                 fsm.append(
-                    [
+                    (
                         node_after_transition.fsm_state,  # type: ignore
-                        is_invalid_transition,
+                        flags,
                         to_emit
-                    ]
+                    )
                 )
 
     return fsm
 
 
-# TODO: work with bytearray instead? Or how do I make it work for
-# large streams?
-def decode(code: bytes, fsm: list) -> str:
-    # TODO: Possibly just hardcoding is clearer.
+def _encode_freq_table(freq_table: dict[str, int]) -> bytearray:
+    # We know this fits into 1 byte, because the frequency table only
+    # contains distinct ASCII chars.
+    num_chars = len(freq_table)
+
+    # - 1 byte for the number of chars that will follow
+    # - 1 byte to contain the char
+    # - 4 bytes to contain the count
+    freq_table_encoding = struct.pack(
+        eval(FREQ_TABLE_ENCODING_SCHEMA.format(num_chars=num_chars)),
+        *itertools.chain.from_iterable(
+            (c.encode("ASCII"), f) for c, f in freq_table.items()
+        ),
+    )
+
+    ans = bytearray()
+    ans.append(num_chars)
+    ans.extend(freq_table_encoding)
+    return ans
+
+
+def _decode_freq_table(encoding: bytes) -> dict[str, int]:
+    num_chars = encoding[0]
+    decoding = struct.unpack(
+        eval(FREQ_TABLE_ENCODING_SCHEMA.format(num_chars=num_chars)),
+        encoding[1:],  # First byte is `num_chars`
+    )
+    freq_table = {
+        decoding[i].decode("ASCII"): decoding[i+1]
+        for i in range(0, len(decoding), 2)
+    }
+    return freq_table
+
+
+def encode(text: str) -> bytearray:
+    freq_table = _get_freq_table(text)
+    huffman_tree = _get_huffman_tree(freq_table)
+    huffman_code = _get_huffman_code(huffman_tree)
+
+    encoding = []
+    for char in text:
+        encoding.append(huffman_code[char])
+    encoding.append(huffman_code[PSEUDO_EOF])
+    encoding = "".join(encoding)
+
+    byte_encoding = _encode_freq_table(freq_table)
+    for i in range(0, len(encoding), 8):
+        byte = encoding[i:i+8]
+        # Could be that the last byte wouldn't be filled and thus we
+        # need to make sure it is left-aligned. Otherwise zeros would
+        # be inserted into the code (leading to wrong decoding).
+        byte_encoding.append(int(byte, 2) << (8 - len(byte)))
+
+    return byte_encoding
+
+
+def decode(code: bytes) -> str:
+    # Get the FSM to use it for decoding.
+    num_chars = code[0]
+    num_bytes_for_freq_table = 1 + 5*num_chars  # 1 due to num_chars byte
+    freq_table = _decode_freq_table(code[:num_bytes_for_freq_table])
+    huffman_tree = _get_huffman_tree(freq_table)
+    fsm = _get_fsm_decoder(huffman_tree)
+
     # Dynamically create bit masks based on DECODER_WORD_SIZE. For example,
-    # given DECODER_WORD_SIZE=2 then we want to end up with the masks
+    # given DECODER_WORD_SIZE=2 then we want to end up with the masks:
     # 11000000, 00110000, 00001100, 00000011
     shifts = list(range(8-DECODER_WORD_SIZE, -1, -DECODER_WORD_SIZE))
-    base_mask = 2**(DECODER_WORD_SIZE - 1)
+    base_mask = 1 << (DECODER_WORD_SIZE - 1)
     base_mask = base_mask ^ (base_mask - 1)
     masks = [base_mask << shift for shift in shifts]
 
-    # TODO: These print lines are actually pretty usefull for
-    # debugging. Maybe allow a DEBUG = True param?. Convert to logging
-    # module probably.
+    # Constants.
+    num_transitions = 1 << DECODER_WORD_SIZE
+
     ans = []
     state = 0
-    for byte in code:
-        # print()
-        # print(byte, byte.to_bytes(1, "little"), bin(byte)[2:].rjust(8, "0"))
-
+    for byte in itertools.islice(code, num_bytes_for_freq_table, None):
         # Feed DECODER_WORD_SIZE number of bits to the FSM.
         for mask, shift in zip(masks, shifts):
-            idx = (state * 2**DECODER_WORD_SIZE) + ((byte & mask) >> shift)
-            state, invalid, emit = fsm[idx]
-            # print((state, idx), end='->')
+            # Index for current state + transition based on given bits.
+            idx = (state * num_transitions) + ((byte & mask) >> shift)
+            state, flags, emit = fsm[idx]
 
-            if invalid:
-                raise RuntimeError("Invalid code received for given FSM.")
+            if flags & DECODER_FAIL:
+                raise RuntimeError("Invalid code received for given Huffman code.")
 
             if emit:
-                if PSEUDO_EOF in emit:
-                    return "".join(ans)
                 ans.append(emit)
 
-    return "".join(ans)
+            if flags & DECODER_COMPLETE:
+                return "".join(ans)
+
+    raise RuntimeError("PSEUDO_EOF was not in the encoding.")
 
 
 def main():
-    with open("file_text.txt", "r") as f:
-        text = f.read()
+    # with open("file_text.txt", "r") as f:
+    #     text = f.read()
     with open("hamlet.txt", "r") as f:
         text = f.read()
 
-    freq_table = _get_freq_table(text)
-    huffman_tree = _get_huffman_tree(freq_table)
-
-    # TODO: get fsm to process bytes for decoding
-    fsm = _get_fsm_decoder(huffman_tree, word_size=DECODER_WORD_SIZE)
+    # freq_table = _get_freq_table(text)
+    # freq_table_encoded = _encode_freq_table(freq_table)
+    # freq_table_decoded = _decode_freq_table(freq_table_encoded)
+    # assert freq_table_decoded == freq_table
 
     byte_encoding = encode(text)
-
-    # print(text)
-    # print(encoding)
-    # print(len(encoding) % 8)
-    # print()
-    # print(byte_encoding)
-    # print()
-    # print(huffman_code)
-    # print()
-    # pprint.pprint(fsm)
-    # print()
 
     with open("file_binary.raw", "bw") as f:
         f.write(byte_encoding)
@@ -371,16 +458,8 @@ def main():
     with open("file_binary.raw", "br") as f:
         byte_encoding_from_file = f.read()
 
-    # TODO: Actually... the freq table needs to be included in the
-    # encoding as well.
-    # - 1 byte for the number of chars that will follow
-    # - 1 byte to contain the char
-    # - 4 bytes to contain the count
-    output = decode(code=byte_encoding, fsm=fsm)
+    output = decode(code=byte_encoding_from_file)
     assert output == text
-    output = decode(code=byte_encoding_from_file, fsm=fsm)
-    assert output == text
-    # print(output)
 
 
 def run_tests():
