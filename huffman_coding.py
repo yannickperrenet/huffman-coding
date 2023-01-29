@@ -4,7 +4,7 @@
 it (without needing the original text, because the frequency table is
 stored in the encoding as well). The encoding format is as follows:
 
-    - 1 byte: the number of characters in the frequency table
+    - 1 byte: the number of (ASCII) characters in the frequency table.
     - X bytes: where X=5*value_of_previous_byte. These bytes store the
       frequency table using the schema given by
       `FREQ_TABLE_ENCODING_SCHEMA`.
@@ -34,32 +34,8 @@ Todo:
 
 """
 
-
-
-"""
-
-- https://web.stanford.edu/class/archive/cs/cs106b/cs106b.1126/handouts/220%20Huffman%20Encoding.pdf
-- http://www.cs.bc.edu/~signoril/cs102/projects/fall2007/project7.html
-- https://rosettacode.org/wiki/Huffman_coding#Python
-
-Static huffman code table that uses the "optimal" static code for HTTP
-headers (optimal code on a large corpus of example headers):
-
-- https://www.rfc-editor.org/rfc/rfc7541#appendix-B
-- https://github.com/python-hyper/hpack/blob/master/src/hpack/huffman_table.py
-
-Creating a Transducer (FSM) for codes:
-
-- https://hal.science/hal-00620817/document (just above example 1.15)
-
-Unrolling an FSM:
-
-- https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/asplos302-mytkowicz.pdf
-
-"""
-import itertools
 import heapq
-import pprint
+import itertools
 import struct
 import typing as t
 from collections import defaultdict, deque
@@ -377,6 +353,7 @@ def _decode_freq_table(encoding: bytes) -> dict[str, int]:
     return freq_table
 
 
+# TODO: There must be a better/smarter way to do this.
 def encode(text: str) -> bytearray:
     freq_table = _get_freq_table(text)
     huffman_tree = _get_huffman_tree(freq_table)
@@ -440,15 +417,8 @@ def decode(code: bytes) -> str:
 
 
 def main():
-    # with open("file_text.txt", "r") as f:
-    #     text = f.read()
     with open("hamlet.txt", "r") as f:
         text = f.read()
-
-    # freq_table = _get_freq_table(text)
-    # freq_table_encoded = _encode_freq_table(freq_table)
-    # freq_table_decoded = _decode_freq_table(freq_table_encoded)
-    # assert freq_table_decoded == freq_table
 
     byte_encoding = encode(text)
 
@@ -463,23 +433,21 @@ def main():
 
 
 def run_tests():
-    text = "AABACDACA"
+    with open("hamlet.txt", "r") as f:
+        text = f.read()
+
     freq_table = _get_freq_table(text)
-    huffman_tree = _get_huffman_tree(freq_table)
-    huffman_code = _get_huffman_code(huffman_tree)
-    answer = {'B': '111', 'D': '110', 'C': '10', 'A': '0'}
-    assert huffman_code == answer
+    freq_table_encoded = _encode_freq_table(freq_table)
+    freq_table_decoded = _decode_freq_table(freq_table_encoded)
+    assert freq_table_decoded == freq_table
 
-    # This was without the PSEUDO_EOF
-    text = "aaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbcccccccccccccccccccddddddddddddddddddddcba\n"
-    fsm = [
-        [0, 'd'], [0, 'a'], [0, 'c'], [3, ''],
-        [1, 'd'], [2, 'd'], [1, 'a'], [2, 'a'],
-        [1, 'c'], [2, 'c'], [0, '\n'], [0, 'b'],
-        [1, '\n'], [2, '\n'], [1, 'b'], [2, 'b']
-    ]
-    assert _get_fsm_decoder(_get_huffman_tree(text), word_size=2) == fsm
-
+    byte_encoding = encode(text)
+    with open("file_binary.raw", "bw") as f:
+        f.write(byte_encoding)
+    with open("file_binary.raw", "br") as f:
+        byte_encoding_from_file = f.read()
+    output = decode(code=byte_encoding_from_file)
+    assert output == text
 
 
 if __name__ == "__main__":
