@@ -1,8 +1,8 @@
 2 passes for encoding:
 - freq table
-- encoding (actually I do this rather dump so requires another pass)
+- encoding (actually I do this rather dumb so requires another pass)
 
-1 pass decoder using FSM decoding `DECODER_WORD_SIZE` bits at once.
+1 pass decoder using FSM, decoding `DECODER_WORD_SIZE` bits at once.
 
 
 ## Todo
@@ -11,7 +11,7 @@
 - [ ] Working with streams
 - [ ] Benchmark for different `DECODER_WORD_SIZE`
 - [ ] Benchmark against other Huffman Python implementations on PyPi
-- [ ] Some tests
+- [x] Some tests
 - [ ] Implement some more performance improvements as per the Microsoft paper (see resources
   section)
 

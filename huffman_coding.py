@@ -167,7 +167,7 @@ def _get_huffman_code(root: TreeNode) -> dict[str, str]:
 
 def _get_fsm_decoder(
     root: TreeNode,
-    word_size: int = DECODER_WORD_SIZE
+    word_size: int = 4,
 ) -> list[tuple[int, int, str]]:
     """Gets an FSM that can be used as a Huffman decoder.
 
@@ -382,7 +382,7 @@ def decode(code: bytes) -> str:
     num_bytes_for_freq_table = 1 + 5*num_chars  # 1 due to num_chars byte
     freq_table = _decode_freq_table(code[:num_bytes_for_freq_table])
     huffman_tree = _get_huffman_tree(freq_table)
-    fsm = _get_fsm_decoder(huffman_tree)
+    fsm = _get_fsm_decoder(huffman_tree, word_size=DECODER_WORD_SIZE)
 
     # Dynamically create bit masks based on DECODER_WORD_SIZE. For example,
     # given DECODER_WORD_SIZE=2 then we want to end up with the masks:
@@ -428,24 +428,6 @@ def main():
     with open("file_binary.raw", "br") as f:
         byte_encoding_from_file = f.read()
 
-    output = decode(code=byte_encoding_from_file)
-    assert output == text
-
-
-def run_tests():
-    with open("hamlet.txt", "r") as f:
-        text = f.read()
-
-    freq_table = _get_freq_table(text)
-    freq_table_encoded = _encode_freq_table(freq_table)
-    freq_table_decoded = _decode_freq_table(freq_table_encoded)
-    assert freq_table_decoded == freq_table
-
-    byte_encoding = encode(text)
-    with open("file_binary.raw", "bw") as f:
-        f.write(byte_encoding)
-    with open("file_binary.raw", "br") as f:
-        byte_encoding_from_file = f.read()
     output = decode(code=byte_encoding_from_file)
     assert output == text
 
