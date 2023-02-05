@@ -384,11 +384,15 @@ def encode(text: str, chunk_size: t.Optional[int] = None) -> bytearray:
     # actually operate on the bit level.
     if chunk_size is not None:
         if chunk_size == 0:
-            # Some value that worked pretty well.
-            chunk_size = 8 << 100
+            # Equal to `io.DEFAULT_BUFFER_SIZE` and leads to working
+            # with 1KB.
+            chunk_size = 8192
         else:
             chunk_size *= 8
 
+    # TODO: freq_table encoding might be larger than the chunk_size.
+    # Although not really a problem due to large memory of todays
+    # computers, but good to note somewhere.
     freq_table = _get_freq_table(text)
     huffman_tree = _get_huffman_tree(freq_table)
     huffman_code = _get_huffman_code(huffman_tree)
@@ -428,6 +432,8 @@ def encode(text: str, chunk_size: t.Optional[int] = None) -> bytearray:
     return byte_encoding
 
 
+# TODO: When working with streams, be careful as the freq_table might
+# not fit entirely in the first part of the stream
 def decode(code: bytes) -> str:
     # Get the FSM to use it for decoding.
     num_chars = code[0]
