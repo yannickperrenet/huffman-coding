@@ -353,23 +353,75 @@ def _decode_freq_table(encoding: bytes) -> dict[str, int]:
     return freq_table
 
 
-# TODO: There must be a better/smarter way to do this.
-def encode(text: str) -> bytearray:
+# NOTE: 2 pass. So a stream needs to be fed twice or the freq_table
+# has to be given first.
+# TODO: Even when chunk_size is given, the final byte_encoding is
+# kept in memory is well. Ideally, when working with streams the
+# byte_encoding is actually the stream we output to immediately.
+def encode(text: str, chunk_size: t.Optional[int] = None) -> bytearray:
+    """Encode the given text according to the Huffman algorithm.
+
+    When no `chunk_size` is given, then the entire encoding of the text
+    is kept in memory. Whilst this is fastest (since no chunking code
+    has to run), it might not fit into your memory. Without chunking
+    the memory consumption overhead will be equal to the size of `text`.
+
+    Args:
+        text: The text to encode.
+        chunk_size: Number of bytes to encode at once. This limits the
+            total memory consumption of encoding. If `None` is given,
+            then no chunking is used, if zero `0` is given, then a
+            default chunking size is choosen.
+
+    Returns:
+        The encoded text, byte aligned and including the frequency
+        table in the encoding. That way the `decode` function doesn't
+        need the original text in order to decode the encoded text.
+
+    """
+    # From here on `chunk_size` will be the number of bits instead of
+    # number of bytes, to be encoded at once. That is, because we
+    # actually operate on the bit level.
+    if chunk_size is not None:
+        if chunk_size == 0:
+            # Some value that worked pretty well.
+            chunk_size = 8 << 100
+        else:
+            chunk_size *= 8
+
     freq_table = _get_freq_table(text)
     huffman_tree = _get_huffman_tree(freq_table)
     huffman_code = _get_huffman_code(huffman_tree)
-
-    encoding = []
-    for char in text:
-        encoding.append(huffman_code[char])
-    encoding.append(huffman_code[PSEUDO_EOF])
-    encoding = "".join(encoding)
-
     byte_encoding = _encode_freq_table(freq_table)
+
+    encoding_buffer = []
+    bits_in_buffer = 0
+    for char in text:
+        encoded_char = huffman_code[char]
+        encoding_buffer.append(encoded_char)
+
+        if chunk_size is None:
+            continue
+
+        bits_in_buffer += len(encoded_char)
+        if bits_in_buffer < chunk_size:
+            continue
+
+        encoding = "".join(encoding_buffer)
+        for i in range(0, chunk_size, 8):
+            byte = encoding[i:i+8]
+            byte_encoding.append(int(byte, 2))
+
+        encoding_buffer = [encoding[chunk_size:]]
+        bits_in_buffer = len(encoding) - bits_in_buffer
+        encoding = ""
+
+    encoding_buffer.append(huffman_code[PSEUDO_EOF])
+    encoding = "".join(encoding_buffer)
     for i in range(0, len(encoding), 8):
         byte = encoding[i:i+8]
-        # Could be that the last byte wouldn't be filled and thus we
-        # need to make sure it is left-aligned. Otherwise zeros would
+        # Could be that the last byte isn't completely filled and thus
+        # we need to make sure it is left-aligned. Otherwise zeros would
         # be inserted into the code (leading to wrong decoding).
         byte_encoding.append(int(byte, 2) << (8 - len(byte)))
 

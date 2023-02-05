@@ -42,6 +42,7 @@ class TestEncodingDecoding(unittest.TestCase):
         """Tests encoding/decoding of random texts."""
         for i in range(10):
             word_size = random.choice([1, 2, 4, 8])
+            chunk_size = random.choice([None, 0, 5])
             huffman_coding.DECODER_WORD_SIZE = word_size
             msg = (
                 f"Testing whether `text = decode(encode(text))`"
@@ -49,7 +50,7 @@ class TestEncodingDecoding(unittest.TestCase):
             )
             with self.subTest(msg=msg):
                 text = get_random_text()
-                byte_encoding = encode(text)
+                byte_encoding = encode(text, chunk_size=chunk_size)
 
                 self.assertEqual(text, decode(byte_encoding))
 
@@ -62,4 +63,4 @@ class TestEncodingDecoding(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main(verbosity=1)
+    unittest.main(verbosity=2)

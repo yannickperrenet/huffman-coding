@@ -7,13 +7,17 @@
 
 ## Todo
 
-- [ ] Working with files that don't fit into memory
+- [x] There must be a smarter way for the encoding part.
 - [ ] Working with streams
+- [ ] Working with files that don't fit into memory
 - [ ] Benchmark for different `DECODER_WORD_SIZE`
 - [ ] Benchmark against other Huffman Python implementations on PyPi
 - [x] Some tests
-- [ ] Implement some more performance improvements as per the Microsoft paper (see resources
-  section)
+- [ ] Implement some more performance improvements as per the Microsoft paper (see resources)
+- [ ] It was mentioned somewhere that huffman encoding/decoding is embarrasingly parallel. Let's add
+  a `num_jobs` configuration parameter that allows you to specify the number of processes. Although
+  in Python I don't expect it to be faster since the GIL only allows 1 thread to be running at a
+  time.
 
 ## Resources
 
