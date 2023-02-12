@@ -37,6 +37,7 @@ Todo:
 import heapq
 import io
 import itertools
+import os
 import struct
 import sys
 import typing as t
@@ -99,9 +100,12 @@ class TreeNode:
         )
 
 
-def _get_freq_table(f_in: t.TextIO) -> dict[str, int]:
+def _get_freq_table(f_in: t.TextIO, buffering: int) -> dict[str, int]:
+    if buffering < 1:
+        raise ValueError("`buffering` must be at least 1.")
+
     freq_table = defaultdict(int)
-    while (chars := f_in.read(io.DEFAULT_BUFFER_SIZE)):
+    while (chars := f_in.read(buffering)):
         for char in chars:
             freq_table[char] += 1
 
@@ -343,11 +347,17 @@ def _encode_freq_table(freq_table: dict[str, int]) -> bytearray:
     return ans
 
 
-def _decode_freq_table(encoding: bytes) -> dict[str, int]:
-    num_chars = encoding[0]
+def _decode_freq_table(
+    encoding: bytes,
+    num_chars: t.Optional[int] = None,
+) -> dict[str, int]:
+    if num_chars is None:
+        num_chars = encoding[0]
+        encoding = encoding[1:]  # First byte is `num_chars`
+
     decoding = struct.unpack(
         eval(FREQ_TABLE_ENCODING_SCHEMA.format(num_chars=num_chars)),
-        encoding[1:],  # First byte is `num_chars`
+        encoding,
     )
     freq_table = {
         decoding[i].decode("ASCII"): decoding[i+1]
@@ -356,16 +366,27 @@ def _decode_freq_table(encoding: bytes) -> dict[str, int]:
     return freq_table
 
 
-# NOTE: 2 pass. So a stream needs to be fed twice or the freq_table
-# has to be given first.
-# TODO: Even when chunk_size is given, the final byte_encoding is
+def _get_buffering_size(stream: t.IO) -> int:
+    # https://github.com/python/cpython/blob/b652d40f1c88fcd8595cd401513f6b7f8e499471/Lib/_pyio.py#L248
+    buffering = io.DEFAULT_BUFFER_SIZE
+    try:
+        bs = os.fstat(stream.fileno()).st_blksize
+    except (OSError, AttributeError):
+        pass
+    else:
+        if bs > 1:
+            buffering = bs
+
+    return buffering
+
+
+# TODO: Even when buffering is given, the final byte_encoding is
 # kept in memory is well. Ideally, when working with streams the
 # byte_encoding is actually the stream we output to immediately.
-# TODO: Make f_in optional, if not given then stdin is used
 def encode(
     f_in: t.TextIO,
     f_out: t.Optional[t.BinaryIO] = None ,
-    chunk_size: t.Optional[int] = None
+    buffering: int = -1,
 ):
     """Encodes the given text according to the Huffman algorithm.
 
@@ -374,53 +395,56 @@ def encode(
     table in the encoding. That way the `decode` function doesn't need
     the original text in order to decode the encoded text.
 
-    When no `chunk_size` is given, then the entire encoding of the text
-    is kept in memory. Whilst this is fastest (since no chunking code
-    has to run), it might not fit into your memory. Without chunking
-    the memory consumption overhead will be equal to the size of `text`.
+    Regarding the buffering policy. Pass an integer > 1 to `buffering`
+    to indicate the size of a fixed-size chunk buffer. When no buffering
+    argument is given, the default buffering policy works as follows:
+
+    * Streams are buffered in fixed-size chunks; the size of the buffer
+      is chosen using a heuristic trying to determine the underlying
+      device's "block size" and falling back on
+      `io.DEFAULT_BUFFER_SIZE`. On many systems, the buffer will
+      typically be 4096 or 8192 bytes long.
+
+    To reduce memory consumption and improve performance, pass an
+    unbuffered binary stream as `f_out`. This function already buffers
+    the stream so there is no reason to buffer it elsewhere as well. For
+    example::
+
+        with open("file_path", mode="rb", buffering=0) as f_out:
+            encode(..., f_out=f_out)
 
     Args:
-        text: The text to encode.
-        chunk_size: Number of bytes to encode at once. This limits the
-            total memory consumption of encoding. If `None` is given,
-            then no chunking is used, if zero `0` is given, then a
-            default chunking size is choosen, otherwise the given size
-            is used.
+        f_in: A seekable stream to be encoded. The encoding requires
+            2 passes of the input and thus the stream needs to be
+            seekable.
+        buffering: An optional integer used to set the buffering policy.
 
     Returns:
         None. The encoded text will be contained in `f_out`.
 
     """
     if not f_in.seekable():
-        raise TypeError(f"Input stream `f_in` has to be seekable: {f_in}")
+        raise ValueError(f"Input stream `f_in` has to be seekable: {f_in}")
+
+    if buffering < 0:
+        buffering = _get_buffering_size(f_in)
+    elif buffering == 0:
+        raise ValueError("`buffering` can't be disabled for text streams.")
+    # NOTE: Due to encoding using strings, the overhead is equal to
+    # `buffering_bits` bytes. Problem is that we want to reduce
+    # overhead, but also make sure we write at least a blocksize to
+    # the stream.
+    buffering_bits = buffering * 8
 
     if f_out is None:
         # Use the underlying binary buffer of stdout.
         f_out = sys.stdout.buffer
 
-    # TODO: make chunk_size behave like `buffering` in `io.open()`
-    # TODO: Rename chunk_size to buffer_size
-    # try:
-    #     bs = os.fstat(raw.fileno()).st_blksize
-    # except (OSError, AttributeError):
-    #     pass
-    # else:
-    #     if bs > 1:
-    #         buffering = bs
-    # From here on `chunk_size` will be the number of bits instead of
-    # number of bytes, to be encoded at once. That is, because we
-    # actually operate on the bit level.
-    if chunk_size is not None:
-        if chunk_size == 0:
-            chunk_size = io.DEFAULT_BUFFER_SIZE  # 8192
-        else:
-            chunk_size *= 8
-
-    freq_table = _get_freq_table(f_in)
+    freq_table = _get_freq_table(f_in, buffering=buffering)
     # Seek start of stream because the frequency table construction
     # has read the entire stream.
     f_in.seek(0)
-    # NOTE: Frequency table writing is not chunked.
+    # TODO: Frequency table writing is not buffered.
     f_out.write(_encode_freq_table(freq_table))
 
     huffman_tree = _get_huffman_tree(freq_table)
@@ -430,24 +454,21 @@ def encode(
     byte_encoding = bytearray()
     encoding_buffer = []
     bits_in_buffer = 0
-    while (chars := f_in.read(io.DEFAULT_BUFFER_SIZE)):
+    while (chars := f_in.read(buffering)):
         for char in chars:
             encoded_char = huffman_code[char]
             encoding_buffer.append(encoded_char)
 
-            if chunk_size is None:
-                continue
-
             bits_in_buffer += len(encoded_char)
-            if bits_in_buffer < chunk_size:
+            if bits_in_buffer < buffering_bits:
                 continue
 
             encoding = "".join(encoding_buffer)
-            for i in range(0, chunk_size, 8):
+            for i in range(0, buffering_bits, 8):
                 byte = encoding[i:i+8]
                 byte_encoding.append(int(byte, 2))
 
-            encoding_buffer = [encoding[chunk_size:]]
+            encoding_buffer = [encoding[buffering_bits:]]
             bits_in_buffer = len(encoding) - bits_in_buffer
             encoding = ""  # old string can be GC
             f_out.write(byte_encoding)
@@ -465,19 +486,30 @@ def encode(
     f_out.write(byte_encoding)
 
 
-# TODO: When working with streams, be careful as the freq_table might
-# not fit entirely in the first part of the stream
 def decode(f_in: t.BinaryIO, f_out: t.Optional[t.TextIO]) -> None:
+    """Decodes a binary stream containing the output of `encode()`.
+
+    To reduce memory consumption and improve performance, pass an
+    unbuffered binary stream as `f_in`. This function already buffers
+    the stream so there is no reason to buffer it elsewhere as well. For
+    example::
+
+        with open("file_path", mode="rb", buffering=0) as f_in:
+            decode(f_in=f_in)
+
+    """
     if f_out is None:
         f_out = sys.stdout
 
     # Get the FSM to use it for decoding.
     # NOTE: byteorder doesn't matter since we are reading just 1 byte.
     num_chars = int.from_bytes(f_in.read(1), byteorder="little")
-    # TODO: Seeks are "expensive"!
-    f_in.seek(0)
-    num_bytes_for_freq_table = 1 + 5*num_chars  # 1 due to num_chars byte
-    freq_table = _decode_freq_table(f_in.read(num_bytes_for_freq_table))
+    # See `FREQ_TABLE_ENCODING_SCHEMA`. `'cI'` take 1 and 4 bytes resp.
+    num_bytes_for_freq_table = 5*num_chars
+    freq_table = _decode_freq_table(
+        f_in.read(num_bytes_for_freq_table),
+        num_chars=num_chars
+    )
     huffman_tree = _get_huffman_tree(freq_table)
     fsm = _get_fsm_decoder(huffman_tree, word_size=DECODER_WORD_SIZE)
 
@@ -493,11 +525,8 @@ def decode(f_in: t.BinaryIO, f_out: t.Optional[t.TextIO]) -> None:
     num_transitions = 1 << DECODER_WORD_SIZE
 
     state = 0
-    # TODO: Faster to use io.BufferedReader / Writer instead?
-    # Don't read just a byte at a time.
-    # TODO: use read1 instead? Im so confused. How does buffering
-    # work and where is it buffered and why?
-    while (bytes := f_in.read(io.DEFAULT_BUFFER_SIZE)):
+    buffering = _get_buffering_size(f_in)
+    while (bytes := f_in.read(buffering)):
         for byte in bytes:
             # Feed DECODER_WORD_SIZE number of bits to the FSM.
             for mask, shift in zip(masks, shifts):
@@ -520,40 +549,6 @@ def decode(f_in: t.BinaryIO, f_out: t.Optional[t.TextIO]) -> None:
 def main():
     # TODO: CLI
     ...
-
-    import io
-    import random
-    import string
-
-    def get_random_text() -> str:
-        text_size = 10**6
-
-        # Get a random text that, just like regular English, has some
-        # characters that occur more often than others.
-        # NOTE: We know this text doesn't contain the `PSEUDO_EOF`.
-        rands = [
-            int(random.gauss(50, 15))
-            for _ in range(text_size)
-        ]
-        text = [
-            string.printable[r]
-            for r in rands
-            if 0 <= r <= 99
-        ]
-
-        return "".join(text)
-
-    text = get_random_text()
-    text_stream = io.StringIO()
-    text_stream.write(text)
-
-    byte_encoding = io.BytesIO()
-    encode(f_in=text_stream, f_out=byte_encoding)
-    byte_encoding.seek(0)
-
-    decoded_text = io.StringIO()
-    decode(f_in=byte_encoding, f_out=decoded_text)
-    decoded_text.seek(0)
 
 
 if __name__ == "__main__":
