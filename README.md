@@ -8,16 +8,33 @@
 ## Todo
 
 - [x] There must be a smarter way for the encoding part.
-- [ ] Working with streams
+- [ ] Even better to use `os.fstat(f.fileno()).st_blksize` or at least a multiple of it instead of
+  the hardcoded `io.DEFAULT_BUFFER_SIZE`
+- [ ] Working with streams, exclusively! No strings.
+    - [ ] `get_random_text()` to only return stream
+    - [ ] Exclusively work with streams, no more strings.
+    - [x] Reading just 1 byte at a time is rather slow. Can we do this faster? Maybe read a chunk to
+      a buffer (which is then in memory) and then read 1 byte from there each time.
+    - [x] I so don't understand buffering... doesn't Python buffer for me and thus reading just 1
+      byte is fast? Appears that it is slow.
+- [ ] Benchmark using dict vs list for counts. Which has faster lookup?
 - [ ] Working with files that don't fit into memory
-- [ ] Benchmark for different `DECODER_WORD_SIZE`
-- [ ] Benchmark against other Huffman Python implementations on PyPi
+- [ ] Benchmark against other Huffman Python implementations on PyPi. See dataset used in Microsoft
+  benchmark
+    - [ ] Benchmark for different `DECODER_WORD_SIZE`
 - [x] Some tests
 - [ ] Implement some more performance improvements as per the Microsoft paper (see resources)
-- [ ] It was mentioned somewhere that huffman encoding/decoding is embarrasingly parallel. Let's add
-  a `num_jobs` configuration parameter that allows you to specify the number of processes. Although
-  in Python I don't expect it to be faster since the GIL only allows 1 thread to be running at a
-  time.
+
+
+## Notes
+
+ TODO: Put seeks inside encode() and decode(), strange
+ otherwise. --> Not strange because if you write to
+ file then this seek is not needed.
+
+## Further improvements
+
+- [Embarrassingly parallel Huffman encoding](http://www.ittc.ku.edu/~jsv/Papers/HoV95.pdcfull.pdf)
 
 ## Resources
 

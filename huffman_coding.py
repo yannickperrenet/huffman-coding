@@ -35,6 +35,7 @@ Todo:
 """
 
 import heapq
+import io
 import itertools
 import struct
 import sys
@@ -98,10 +99,11 @@ class TreeNode:
         )
 
 
-def _get_freq_table(f_in: t.Union[t.TextIO, str]) -> dict[str, int]:
+def _get_freq_table(f_in: t.TextIO) -> dict[str, int]:
     freq_table = defaultdict(int)
-    for char in f_in:
-        freq_table[char] += 1
+    while (chars := f_in.read(io.DEFAULT_BUFFER_SIZE)):
+        for char in chars:
+            freq_table[char] += 1
 
     freq_table[PSEUDO_EOF] += 1
     if freq_table[PSEUDO_EOF] > 1:
@@ -359,12 +361,18 @@ def _decode_freq_table(encoding: bytes) -> dict[str, int]:
 # TODO: Even when chunk_size is given, the final byte_encoding is
 # kept in memory is well. Ideally, when working with streams the
 # byte_encoding is actually the stream we output to immediately.
+# TODO: Make f_in optional, if not given then stdin is used
 def encode(
-    f_in: t.Union[t.TextIO, str],
+    f_in: t.TextIO,
     f_out: t.Optional[t.BinaryIO] = None ,
     chunk_size: t.Optional[int] = None
 ):
-    """Encode the given text according to the Huffman algorithm.
+    """Encodes the given text according to the Huffman algorithm.
+
+    Encodes the stream given by `f_in` and writes the encoded stream to
+    `f_out`. The encoded text is byte aligned and includes the frequency
+    table in the encoding. That way the `decode` function doesn't need
+    the original text in order to decode the encoded text.
 
     When no `chunk_size` is given, then the entire encoding of the text
     is kept in memory. Whilst this is fastest (since no chunking code
@@ -376,70 +384,74 @@ def encode(
         chunk_size: Number of bytes to encode at once. This limits the
             total memory consumption of encoding. If `None` is given,
             then no chunking is used, if zero `0` is given, then a
-            default chunking size is choosen.
+            default chunking size is choosen, otherwise the given size
+            is used.
 
     Returns:
-        The encoded text, byte aligned and including the frequency
-        table in the encoding. That way the `decode` function doesn't
-        need the original text in order to decode the encoded text.
+        None. The encoded text will be contained in `f_out`.
 
     """
-    if not isinstance(f_in, str) and not f_in.seekable():
+    if not f_in.seekable():
         raise TypeError(f"Input stream `f_in` has to be seekable: {f_in}")
 
     if f_out is None:
         # Use the underlying binary buffer of stdout.
         f_out = sys.stdout.buffer
 
+    # TODO: make chunk_size behave like `buffering` in `io.open()`
+    # TODO: Rename chunk_size to buffer_size
+    # try:
+    #     bs = os.fstat(raw.fileno()).st_blksize
+    # except (OSError, AttributeError):
+    #     pass
+    # else:
+    #     if bs > 1:
+    #         buffering = bs
     # From here on `chunk_size` will be the number of bits instead of
     # number of bytes, to be encoded at once. That is, because we
     # actually operate on the bit level.
     if chunk_size is not None:
         if chunk_size == 0:
-            # Equal to `io.DEFAULT_BUFFER_SIZE` and leads to working
-            # with 1KB.
-            chunk_size = 8192
+            chunk_size = io.DEFAULT_BUFFER_SIZE  # 8192
         else:
             chunk_size *= 8
 
     freq_table = _get_freq_table(f_in)
-    if not isinstance(f_in, str):
-        # Seek start of stream because the frequency table construction
-        # has read the entire stream.
-        f_in.seek(0)
+    # Seek start of stream because the frequency table construction
+    # has read the entire stream.
+    f_in.seek(0)
     # NOTE: Frequency table writing is not chunked.
     f_out.write(_encode_freq_table(freq_table))
 
     huffman_tree = _get_huffman_tree(freq_table)
     huffman_code = _get_huffman_code(huffman_tree)
 
-    # TODO: Check whether it is indeed fast when letting Python take
-    # care of the buffering/reading when looping over the input char
-    # by char.
+    # TODO: https://www.python.org/doc/essays/list2str/
     byte_encoding = bytearray()
     encoding_buffer = []
     bits_in_buffer = 0
-    for char in f_in:
-        encoded_char = huffman_code[char]
-        encoding_buffer.append(encoded_char)
+    while (chars := f_in.read(io.DEFAULT_BUFFER_SIZE)):
+        for char in chars:
+            encoded_char = huffman_code[char]
+            encoding_buffer.append(encoded_char)
 
-        if chunk_size is None:
-            continue
+            if chunk_size is None:
+                continue
 
-        bits_in_buffer += len(encoded_char)
-        if bits_in_buffer < chunk_size:
-            continue
+            bits_in_buffer += len(encoded_char)
+            if bits_in_buffer < chunk_size:
+                continue
 
-        encoding = "".join(encoding_buffer)
-        for i in range(0, chunk_size, 8):
-            byte = encoding[i:i+8]
-            byte_encoding.append(int(byte, 2))
+            encoding = "".join(encoding_buffer)
+            for i in range(0, chunk_size, 8):
+                byte = encoding[i:i+8]
+                byte_encoding.append(int(byte, 2))
 
-        encoding_buffer = [encoding[chunk_size:]]
-        bits_in_buffer = len(encoding) - bits_in_buffer
-        encoding = ""  # old string can be GC
-        f_out.write(byte_encoding)
-        byte_encoding = bytearray()
+            encoding_buffer = [encoding[chunk_size:]]
+            bits_in_buffer = len(encoding) - bits_in_buffer
+            encoding = ""  # old string can be GC
+            f_out.write(byte_encoding)
+            byte_encoding = bytearray()
 
     encoding_buffer.append(huffman_code[PSEUDO_EOF])
     encoding = "".join(encoding_buffer)
@@ -462,7 +474,7 @@ def decode(f_in: t.BinaryIO, f_out: t.Optional[t.TextIO]) -> None:
     # Get the FSM to use it for decoding.
     # NOTE: byteorder doesn't matter since we are reading just 1 byte.
     num_chars = int.from_bytes(f_in.read(1), byteorder="little")
-    # TODO: Seeks are expensive!
+    # TODO: Seeks are "expensive"!
     f_in.seek(0)
     num_bytes_for_freq_table = 1 + 5*num_chars  # 1 due to num_chars byte
     freq_table = _decode_freq_table(f_in.read(num_bytes_for_freq_table))
@@ -481,24 +493,26 @@ def decode(f_in: t.BinaryIO, f_out: t.Optional[t.TextIO]) -> None:
     num_transitions = 1 << DECODER_WORD_SIZE
 
     state = 0
-    # TODO: Some buffering? Or do we let Python do all buffering?
-    # Would guess that reading 1 byte each time is terribly slow.
-    while (byte := f_in.read(1)):
-        byte = int.from_bytes(byte, byteorder="big")
-        # Feed DECODER_WORD_SIZE number of bits to the FSM.
-        for mask, shift in zip(masks, shifts):
-            # Index for current state + transition based on given bits.
-            idx = (state * num_transitions) + ((byte & mask) >> shift)
-            state, flags, emit = fsm[idx]
+    # TODO: Faster to use io.BufferedReader / Writer instead?
+    # Don't read just a byte at a time.
+    # TODO: use read1 instead? Im so confused. How does buffering
+    # work and where is it buffered and why?
+    while (bytes := f_in.read(io.DEFAULT_BUFFER_SIZE)):
+        for byte in bytes:
+            # Feed DECODER_WORD_SIZE number of bits to the FSM.
+            for mask, shift in zip(masks, shifts):
+                # Index for current state + transition based on given bits.
+                idx = (state * num_transitions) + ((byte & mask) >> shift)
+                state, flags, emit = fsm[idx]
 
-            if flags & DECODER_FAIL:
-                raise RuntimeError("Invalid code received for given Huffman code.")
+                if flags & DECODER_FAIL:
+                    raise RuntimeError("Invalid code received for given Huffman code.")
 
-            if emit:
-                f_out.write(emit)
+                if emit:
+                    f_out.write(emit)
 
-            if flags & DECODER_COMPLETE:
-                return
+                if flags & DECODER_COMPLETE:
+                    return
 
     raise RuntimeError("PSEUDO_EOF was not in the encoding.")
 
@@ -506,6 +520,40 @@ def decode(f_in: t.BinaryIO, f_out: t.Optional[t.TextIO]) -> None:
 def main():
     # TODO: CLI
     ...
+
+    import io
+    import random
+    import string
+
+    def get_random_text() -> str:
+        text_size = 10**6
+
+        # Get a random text that, just like regular English, has some
+        # characters that occur more often than others.
+        # NOTE: We know this text doesn't contain the `PSEUDO_EOF`.
+        rands = [
+            int(random.gauss(50, 15))
+            for _ in range(text_size)
+        ]
+        text = [
+            string.printable[r]
+            for r in rands
+            if 0 <= r <= 99
+        ]
+
+        return "".join(text)
+
+    text = get_random_text()
+    text_stream = io.StringIO()
+    text_stream.write(text)
+
+    byte_encoding = io.BytesIO()
+    encode(f_in=text_stream, f_out=byte_encoding)
+    byte_encoding.seek(0)
+
+    decoded_text = io.StringIO()
+    decode(f_in=byte_encoding, f_out=decoded_text)
+    decoded_text.seek(0)
 
 
 if __name__ == "__main__":
