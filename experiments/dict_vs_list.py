@@ -35,8 +35,12 @@ def main():
     #         lst[ord_(l) - 97]
 
     # NOTE: 1.38s
-    for _ in range(N):
-        map(lambda x: ord(x) - 97, letters)
+    # for _ in range(N):
+    #     map(lambda x: ord(x) - 97, letters)
+
+    # NOTE: 1.08s
+    # for _ in range(N):
+    #     map(dct.__getitem__, letters)
 
 
 if __name__ == "__main__":
@@ -44,4 +48,4 @@ if __name__ == "__main__":
 
     # NOTE: No problem since we can just create a 256 len list to contain
     # all chars. No need to be contiguous.
-    is_contiguous()
+    # is_contiguous()

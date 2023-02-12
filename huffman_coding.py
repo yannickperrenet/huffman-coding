@@ -41,7 +41,7 @@ import os
 import struct
 import sys
 import typing as t
-from collections import defaultdict, deque
+from collections import defaultdict, deque, Counter
 from enum import Enum
 
 
@@ -104,10 +104,9 @@ def _get_freq_table(f_in: t.TextIO, buffering: int) -> dict[str, int]:
     if buffering < 1:
         raise ValueError("`buffering` must be at least 1.")
 
-    freq_table = defaultdict(int)
+    freq_table = Counter()
     while (chars := f_in.read(buffering)):
-        for char in chars:
-            freq_table[char] += 1
+        freq_table.update(chars)
 
     freq_table[PSEUDO_EOF] += 1
     if freq_table[PSEUDO_EOF] > 1:
@@ -430,11 +429,6 @@ def encode(
         buffering = _get_buffering_size(f_in)
     elif buffering == 0:
         raise ValueError("`buffering` can't be disabled for text streams.")
-    # NOTE: Due to encoding using strings, the overhead is equal to
-    # `buffering_bits` bytes. Problem is that we want to reduce
-    # overhead, but also make sure we write at least a blocksize to
-    # the stream.
-    buffering_bits = buffering * 8
 
     if f_out is None:
         # Use the underlying binary buffer of stdout.
@@ -444,38 +438,51 @@ def encode(
     # Seek start of stream because the frequency table construction
     # has read the entire stream.
     f_in.seek(0)
-    # TODO: Frequency table writing is not buffered.
+    # NOTE: Frequency table writing is not buffered. For ASCII the table
+    # should fit in one block (256 chars * 5 encoding < 1 block bytes).
+    # In addition, it is fully kept in memory already anyways.
     f_out.write(_encode_freq_table(freq_table))
 
     huffman_tree = _get_huffman_tree(freq_table)
     huffman_code = _get_huffman_code(huffman_tree)
 
-    # TODO: https://www.python.org/doc/essays/list2str/
+    # Do not maintain an additional write buffer, simply write the
+    # encoding of a buffered read. These writes will still be of decent
+    # size because:
+    # - On average Huffman encoding compresses by 40%.
+    # Even though the write will likely be smaller than a block size the
+    # OS ensures "smooth sailing" (as it will first write to memory
+    # before writing to the underlying disk storage).
     byte_encoding = bytearray()
-    encoding_buffer = []
-    bits_in_buffer = 0
+    encoding = ""
     while (chars := f_in.read(buffering)):
-        for char in chars:
-            encoded_char = huffman_code[char]
-            encoding_buffer.append(encoded_char)
+        # Since the encoding of `chars` might not be octet aligned we
+        # need to keep the overflowing few bits and make sure to include
+        # them when processing the next sequence of `chars`.
+        encoding = "".join(
+            itertools.chain(
+                encoding,
+                # `map()` with a built-in function beats a for-loop.
+                # Thus use a more functional style. See:
+                # https://www.python.org/doc/essays/list2str/
+                map(huffman_code.__getitem__, chars)
+            )
+        )
+        stop = len(encoding) - len(encoding) % 8
+        for i in range(0, stop, 8):
+            byte = encoding[i:i+8]
+            byte_encoding.append(int(byte, 2))
+        encoding = encoding[stop:]
+        f_out.write(byte_encoding)
+        byte_encoding = bytearray()
 
-            bits_in_buffer += len(encoded_char)
-            if bits_in_buffer < buffering_bits:
-                continue
-
-            encoding = "".join(encoding_buffer)
-            for i in range(0, buffering_bits, 8):
-                byte = encoding[i:i+8]
-                byte_encoding.append(int(byte, 2))
-
-            encoding_buffer = [encoding[buffering_bits:]]
-            bits_in_buffer = len(encoding) - bits_in_buffer
-            encoding = ""  # old string can be GC
-            f_out.write(byte_encoding)
-            byte_encoding = bytearray()
-
-    encoding_buffer.append(huffman_code[PSEUDO_EOF])
-    encoding = "".join(encoding_buffer)
+    encoding = "".join(
+        itertools.chain(
+            encoding,
+            # Insert `PSEUDO_EOF` at end of encoding.
+            huffman_code[PSEUDO_EOF],
+        )
+    )
     for i in range(0, len(encoding), 8):
         byte = encoding[i:i+8]
         # Could be that the last byte isn't completely filled and thus
