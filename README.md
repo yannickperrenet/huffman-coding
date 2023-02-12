@@ -7,30 +7,31 @@
 
 ## Todo
 
-- [x] There must be a smarter way for the encoding part.
 - [ ] Even better to use `os.fstat(f.fileno()).st_blksize` or at least a multiple of it instead of
   the hardcoded `io.DEFAULT_BUFFER_SIZE`
-- [ ] Working with streams, exclusively! No strings.
-    - [ ] `get_random_text()` to only return stream
-    - [ ] Exclusively work with streams, no more strings.
-    - [x] Reading just 1 byte at a time is rather slow. Can we do this faster? Maybe read a chunk to
-      a buffer (which is then in memory) and then read 1 byte from there each time.
-    - [x] I so don't understand buffering... doesn't Python buffer for me and thus reading just 1
-      byte is fast? Appears that it is slow.
-- [ ] Benchmark using dict vs list for counts. Which has faster lookup?
+- [ ] Improve performance of encoding
 - [ ] Working with files that don't fit into memory
 - [ ] Benchmark against other Huffman Python implementations on PyPi. See dataset used in Microsoft
   benchmark
     - [ ] Benchmark for different `DECODER_WORD_SIZE`
-- [x] Some tests
 - [ ] Implement some more performance improvements as per the Microsoft paper (see resources)
+- [x] Benchmark using dict vs list for counts. Which has faster lookup?
+- [x] Some tests
+- [x] There must be a smarter way for the encoding part.
+- [x] Working with streams, exclusively! No strings.
+    - [x] `get_random_text()` to only return stream
+    - [x] Exclusively work with streams, no more strings.
+    - [x] Reading just 1 byte at a time is rather slow. Can we do this faster? Maybe read a chunk to
+      a buffer (which is then in memory) and then read 1 byte from there each time.
+    - [x] I so don't understand buffering... doesn't Python buffer for me and thus reading just 1
+      byte is fast? Appears that it is slow.
 
 
 ## Notes
 
- TODO: Put seeks inside encode() and decode(), strange
- otherwise. --> Not strange because if you write to
- file then this seek is not needed.
+Having to call `seek(0)` on streams after `encode()` and `decode()` calls.
+
+Using `newline=""` on `open()` calls.
 
 ## Further improvements
 
