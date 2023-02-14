@@ -104,6 +104,8 @@ def _get_freq_table(f_in: t.TextIO, buffering: int) -> dict[str, int]:
     if buffering < 1:
         raise ValueError("`buffering` must be at least 1.")
 
+    # Uses underlying C implementation of:
+    # `_collections._count_elements()`
     freq_table = Counter()
     while (chars := f_in.read(buffering)):
         freq_table.update(chars)
@@ -456,9 +458,6 @@ def encode(
     byte_encoding = bytearray()
     encoding = ""
     while (chars := f_in.read(buffering)):
-        # Since the encoding of `chars` might not be octet aligned we
-        # need to keep the overflowing few bits and make sure to include
-        # them when processing the next sequence of `chars`.
         encoding = "".join(
             itertools.chain(
                 encoding,
@@ -468,21 +467,31 @@ def encode(
                 map(huffman_code.__getitem__, chars)
             )
         )
+        # Make sure the encoding is octet aligned by considering as many
+        # (full) bit octets as possible.
         stop = len(encoding) - len(encoding) % 8
-        for i in range(0, stop, 8):
-            byte = encoding[i:i+8]
-            byte_encoding.append(int(byte, 2))
+        # Pre-allocate the bytearray and write into the right location
+        # instead of appending each time, which has the overhead of
+        # dynamically growing the underlying buffer.
+        byte_encoding = bytearray(stop >> 3)  # >> 3 = // 8
+        for e_i, b_i in zip(range(0, stop, 8), range(stop >> 3)):
+            byte = encoding[e_i : e_i+8]
+            byte_encoding[b_i] = int(byte, 2)
+        # Since the encoding of `chars` might not be octet aligned we
+        # need to keep the overflowing few bits and make sure to include
+        # them when processing the next sequence of `chars`.
         encoding = encoding[stop:]
         f_out.write(byte_encoding)
-        byte_encoding = bytearray()
 
+    # Processing the small encoding remainder that overflowed the last
+    # octet and insert the `PSEUDO_EOF` at the end of the encoding.
     encoding = "".join(
         itertools.chain(
             encoding,
-            # Insert `PSEUDO_EOF` at end of encoding.
             huffman_code[PSEUDO_EOF],
         )
     )
+    byte_encoding = bytearray()
     for i in range(0, len(encoding), 8):
         byte = encoding[i:i+8]
         # Could be that the last byte isn't completely filled and thus

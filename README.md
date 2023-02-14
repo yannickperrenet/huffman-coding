@@ -8,12 +8,13 @@
 ## Todo
 
 - [ ] CLI
-- [ ] Improve performance of encoding
+- [ ] Profiling
 - [ ] Do stdin and stdout work?
 - [ ] Benchmark against other Huffman Python implementations on PyPi. See dataset used in Microsoft
   benchmark
     - [ ] Benchmark for different `DECODER_WORD_SIZE`
 - [ ] Implement some more performance improvements as per the Microsoft paper (see resources)
+- [x] Improve performance of encoding
 - [x] Chunk size name is stange and values as well, 0 is no buffering, > 0 use that value and -1 is
   default which means using recommended.
   [buffering](https://github.com/python/cpython/blob/b652d40f1c88fcd8595cd401513f6b7f8e499471/Lib/_pyio.py#L123)

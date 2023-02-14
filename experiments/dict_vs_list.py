@@ -1,4 +1,5 @@
 import string
+import _collections
 
 
 def is_contiguous():
@@ -41,6 +42,9 @@ def main():
     # NOTE: 1.08s
     # for _ in range(N):
     #     map(dct.__getitem__, letters)
+
+    for _ in range(N):
+        _collections._count_elements({}, letters)
 
 
 if __name__ == "__main__":
