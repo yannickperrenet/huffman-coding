@@ -41,7 +41,7 @@ import os
 import struct
 import sys
 import typing as t
-from collections import defaultdict, deque, Counter
+from collections import Counter, deque
 from enum import Enum
 
 
@@ -51,8 +51,8 @@ PSEUDO_EOF = chr(4)  # End Of Transmission
 
 # Number of bits to process at once using a Finite State Machine (FSM).
 # Recommend value is 4 as it has a good trade-off between speed and
-# memory consumption. In addition, for large values it takes a
-# considerable amount of time to build up the FSM.
+# memory consumption. Moreover, for large values it takes a considerable
+# amount of time to build up the FSM.
 DECODER_WORD_SIZE = 4
 
 # Decoder flags.
@@ -368,7 +368,7 @@ def _decode_freq_table(
 
 
 def _get_buffering_size(stream: t.IO) -> int:
-    # https://github.com/python/cpython/blob/b652d40f1c88fcd8595cd401513f6b7f8e499471/Lib/_pyio.py#L248
+    # https://github.com/python/cpython/blob/v3.11.0/Lib/_pyio.py#L248
     buffering = io.DEFAULT_BUFFER_SIZE
     try:
         bs = os.fstat(stream.fileno()).st_blksize
@@ -381,9 +381,6 @@ def _get_buffering_size(stream: t.IO) -> int:
     return buffering
 
 
-# TODO: Even when buffering is given, the final byte_encoding is
-# kept in memory is well. Ideally, when working with streams the
-# byte_encoding is actually the stream we output to immediately.
 def encode(
     f_in: t.TextIO,
     f_out: t.Optional[t.BinaryIO] = None ,
@@ -553,7 +550,16 @@ def decode(f_in: t.BinaryIO, f_out: t.Optional[t.TextIO]) -> None:
                 if flags & DECODER_FAIL:
                     raise RuntimeError("Invalid code received for given Huffman code.")
 
+                # TODO: Buffer the write.
                 if emit:
+                    # NOTE: Will result in a system call `write()` every
+                    # time. However, we can't pre-allocate a fixed size
+                    # buffer because we don't know the size (i.e. we
+                    # don't know the number of characters that will be
+                    # emitted). When creating a dynamically sized buffer
+                    # e.g. a list of strings or overallocating, then
+                    # that is about as fast as just writing on every
+                    # emit.
                     f_out.write(emit)
 
                 if flags & DECODER_COMPLETE:
