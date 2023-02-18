@@ -6,7 +6,8 @@ Why another implementation you ask?
 
 -   It is a pure Python implementation with no additional dependencies outside the standard library.
 -   It works with streams exclusively, in a buffered fashion. Meaning that you can encode and decode
-    files (or streams) that don't fit in memory. The total memory consumption peaks at just `70KB`.
+    files (or streams) that are larger than memory. The total memory consumption peaks at just
+    `70KB`.
 -   In contrast to other implementations, the encoding step actually encodes the frequency table as
     well (which the decode step expects to read). This means that the original text does not need to
     be kept for decoding.
@@ -24,7 +25,7 @@ Why another implementation you ask?
     noticed that the RFC for [HPACK: Header Compression for
     HTTP/2](https://www.rfc-editor.org/rfc/rfc7541#appendix-B) included a static Huffman code which
     was being decoded using an FSM in [Python's HPACK
-    implementation](https://github.com/python-hyper/hpack/blob/master/src/hpack/huffman_table.py)
+    implementation](https://github.com/python-hyper/hpack/blob/v4.0.0/src/hpack/huffman_table.py#L131)
     which essentially "unrolled" the FSM by operating on a byte level instead of bit level. I simply
     had to generate a FSM dynamically based on the Huffman code (see `_get_fsm_decoder()`) to be
     able to apply the same principle to non-static Huffman codes.
