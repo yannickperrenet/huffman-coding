@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 """Huffman encoding and decoding.
 
 `encode()` encodes a given stream fully such that `decode()` can decode
@@ -51,8 +53,8 @@ PSEUDO_EOF = chr(4)  # End Of Transmission
 
 # Number of bits to process at once using a Finite State Machine (FSM).
 # Recommend value is 4 as it has a good trade-off between speed and
-# memory consumption. Moreover, for large values it takes a considerable
-# amount of time to build up the FSM.
+# memory consumption. Moreover, for large values it takes longer to
+# build up the FSM.
 DECODER_WORD_SIZE = 4
 
 # Decoder flags.
@@ -499,7 +501,7 @@ def encode(
     f_out.write(byte_encoding)
 
 
-def decode(f_in: t.BinaryIO, f_out: t.Optional[t.TextIO]) -> None:
+def decode(f_in: t.BinaryIO, f_out: t.Optional[t.TextIO] = None) -> None:
     """Decodes a binary stream containing the output of `encode()`.
 
     To reduce memory consumption and improve performance, pass an
@@ -569,8 +571,53 @@ def decode(f_in: t.BinaryIO, f_out: t.Optional[t.TextIO]) -> None:
 
 
 def main():
-    # TODO: CLI
-    ...
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Huffman encoding or decoding of a given file/stream."
+    )
+    parser.add_argument("type", choices=["encode", "decode"], help="To encode or decode.")
+    parser.add_argument(
+        "-i", "--input",
+        help="Input stream, has to be seekable when encoding."
+    )
+    parser.add_argument(
+        "-o", "--output", required=False,
+        help="Output stream. Defaults to STDOUT if not specified."
+    )
+    args = parser.parse_args()
+
+    if args.type == "encode":
+        if args.output is None:
+            with (
+                open(args.input, mode="r", newline="") as f_in
+            ):
+                encode(f_in=f_in)
+        else:
+            with (
+                open(args.input, mode="r", newline="") as f_in,
+                open(args.output, mode="wb", buffering=0) as f_out
+            ):
+                encode(f_in=f_in, f_out=f_out)
+    else:
+        if args.output is None and args.input is None:
+            decode(f_in=sys.stdin.buffer)
+        elif args.input is None:
+            with (
+                open(args.output, mode="w", newline="") as f_out
+            ):
+                decode(f_in=sys.stdin.buffer, f_out=f_out)
+        elif args.output is None:
+            with (
+                open(args.input, mode="rb", buffering=0) as f_in
+            ):
+                decode(f_in=f_in)
+        else:
+            with (
+                open(args.input, mode="rb", buffering=0) as f_in,
+                open(args.output, mode="w", newline="") as f_out
+            ):
+                decode(f_in=f_in, f_out=f_out)
 
 
 if __name__ == "__main__":

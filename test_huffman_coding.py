@@ -14,50 +14,6 @@ encode = huffman_coding.encode
 decode = huffman_coding.decode
 
 
-def get_random_text(text_size=10**4) -> str:
-    # Get a random text that, just like regular English, has some
-    # characters that occur more often than others.
-    # NOTE: We know this text doesn't contain the `PSEUDO_EOF`.
-    rands = [
-        int(random.gauss(50, 15))
-        for _ in range(text_size)
-    ]
-    text = [
-        string.printable[r]
-        for r in rands
-        if 0 <= r <= 99
-    ]
-
-    return "".join(text)
-
-
-def write_large_file(file_path, size=10**8) -> None:
-    with open(file_path, "w") as f:
-        for _ in range(size//1000):
-            f.write(1000 * "a")
-
-
-def get_parametrizations(*iterables: list) -> list:
-    def helper(i: int) -> None:
-        if i == N:
-            ans.append(parametrization[:])
-            return
-
-        for elt in iterables[i]:
-            parametrization.append(elt)
-            helper(i+1)
-            parametrization.pop()
-
-    if not iterables:
-        return []
-
-    N = len(iterables)
-    ans = []
-    parametrization = []
-    helper(0)
-    return ans
-
-
 class TestEncodingDecoding(unittest.TestCase):
     file_path_text = "test_text.txt"
     file_path_bytes = "test_bytes.raw"
@@ -136,10 +92,7 @@ class TestEncodingDecoding(unittest.TestCase):
 
         """
         # Size can be even larger, but that will make the test take longer.
-        size = int(5e6)  # ~5MB
-        with open(self.file_path_text, "w") as f:
-            for _ in range(size//1000):
-                f.write(1000 * "a")
+        write_large_file(self.file_path_text, size=int(5e6))  # ~5MB
 
         tracemalloc.start()
 
@@ -147,13 +100,13 @@ class TestEncodingDecoding(unittest.TestCase):
             open(self.file_path_text, mode="r", newline="") as f_in,
             open(self.file_path_bytes, mode="wb", buffering=0) as f_out
         ):
-            encode(f_in=f_in, f_out=f_out, buffering=1024)
+            encode(f_in=f_in, f_out=f_out)
 
         # Just delete the file to make sure we don't overwrite.
         os.remove(self.file_path_text)
 
         # NOTE: Disable buffering when reading bytes because `decode()`
-        # will already work in buffered fashion.
+        # already buffers reading.
         with (
             open(self.file_path_bytes, mode="rb", buffering=0) as f_in,
             open(self.file_path_text, mode="w", newline="") as f_out
@@ -164,6 +117,50 @@ class TestEncodingDecoding(unittest.TestCase):
         tracemalloc.stop()
 
         self.assertLess(peak_consumption, 2e5)  # 200KB
+
+
+def get_random_text(text_size=10**4) -> str:
+    # Get a random text that, just like regular English, has some
+    # characters that occur more often than others.
+    # NOTE: We know this text doesn't contain the `PSEUDO_EOF`.
+    rands = [
+        int(random.gauss(50, 15))
+        for _ in range(text_size)
+    ]
+    text = [
+        string.printable[r]
+        for r in rands
+        if 0 <= r <= 99
+    ]
+
+    return "".join(text)
+
+
+def write_large_file(file_path, size=10**8) -> None:
+    with open(file_path, "w") as f:
+        for _ in range(size//1000):
+            f.write(1000 * "a")
+
+
+def get_parametrizations(*iterables: list) -> list:
+    def helper(i: int) -> None:
+        if i == N:
+            ans.append(parametrization[:])
+            return
+
+        for elt in iterables[i]:
+            parametrization.append(elt)
+            helper(i+1)
+            parametrization.pop()
+
+    if not iterables:
+        return []
+
+    N = len(iterables)
+    ans = []
+    parametrization = []
+    helper(0)
+    return ans
 
 
 if __name__ == "__main__":
