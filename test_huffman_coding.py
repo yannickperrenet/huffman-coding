@@ -50,7 +50,7 @@ class TestEncodingDecoding(unittest.TestCase):
                 byte_encoding.seek(0)
 
                 decoded_text = io.StringIO()
-                decode(f_in=byte_encoding, f_out=decoded_text)
+                decode(f_in=byte_encoding, f_out=decoded_text, buffering=buffering)
                 decoded_text.seek(0)
                 self.assertEqual(text, decoded_text.read())
 

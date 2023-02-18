@@ -22,7 +22,6 @@ bit-by-bit but can instead (at once) decode `DECODER_WORD_SIZE` number
 of bits.
 
 Todo:
-    - Working with larger than memory input text.
     - The `DECODER_WORD_SIZE` can not be larger than 8 currently,
       because we decode byte-by-byte. To allow for larger values of
       `DECODER_WORD_SIZE` we would have to dynamically change the number
@@ -385,7 +384,7 @@ def _get_buffering_size(stream: t.IO) -> int:
 
 def encode(
     f_in: t.TextIO,
-    f_out: t.Optional[t.BinaryIO] = None ,
+    f_out: t.Optional[t.BinaryIO] = None,
     buffering: int = -1,
 ):
     """Encodes the given text according to the Huffman algorithm.
@@ -501,7 +500,11 @@ def encode(
     f_out.write(byte_encoding)
 
 
-def decode(f_in: t.BinaryIO, f_out: t.Optional[t.TextIO] = None) -> None:
+def decode(
+    f_in: t.BinaryIO,
+    f_out: t.Optional[t.TextIO] = None,
+    buffering: int = -1,
+) -> None:
     """Decodes a binary stream containing the output of `encode()`.
 
     To reduce memory consumption and improve performance, pass an
@@ -515,6 +518,11 @@ def decode(f_in: t.BinaryIO, f_out: t.Optional[t.TextIO] = None) -> None:
     """
     if f_out is None:
         f_out = sys.stdout
+
+    if buffering < 0:
+        buffering = _get_buffering_size(f_in)
+    elif buffering == 0:
+        raise ValueError("`buffering` can't be zero.")
 
     # Get the FSM to use it for decoding.
     # NOTE: byteorder doesn't matter since we are reading just 1 byte.
@@ -540,7 +548,6 @@ def decode(f_in: t.BinaryIO, f_out: t.Optional[t.TextIO] = None) -> None:
     num_transitions = 1 << DECODER_WORD_SIZE
 
     state = 0
-    buffering = _get_buffering_size(f_in)
     while (bytes := f_in.read(buffering)):
         for byte in bytes:
             # Feed DECODER_WORD_SIZE number of bits to the FSM.
@@ -552,7 +559,6 @@ def decode(f_in: t.BinaryIO, f_out: t.Optional[t.TextIO] = None) -> None:
                 if flags & DECODER_FAIL:
                     raise RuntimeError("Invalid code received for given Huffman code.")
 
-                # TODO: Buffer the write.
                 if emit:
                     # NOTE: Will result in a system call `write()` every
                     # time. However, we can't pre-allocate a fixed size
