@@ -98,34 +98,6 @@ decoded_text.seek(0)
 
 Simply run `python3 test_huffman_coding.py`.
 
-## Todo
-
-- [ ] Publish to PyPi?
-- [ ] Go over all comments and docstrings
-- [ ] Add `buffering` to `decode()` as well
-- [x] CLI
-- [x] Does stdout work? (Better explain why stdin doesn't work -- seekable)
-- [x] Write up an awesome README
-- [x] Profiling
-- [x] Improve performance of encoding
-- [x] Chunk size name is stange and values as well, 0 is no buffering, > 0 use that value and -1 is
-  default which means using recommended.
-  [buffering](https://github.com/python/cpython/blob/b652d40f1c88fcd8595cd401513f6b7f8e499471/Lib/_pyio.py#L123)
-- [x] Even better to use `os.fstat(f.fileno()).st_blksize` or at least a multiple of it instead of
-  the hardcoded `io.DEFAULT_BUFFER_SIZE`
-- [x] Working with files that don't fit into memory
-- [x] Benchmark using dict vs list for counts. Which has faster lookup?
-- [x] Some tests
-- [x] There must be a smarter way for the encoding part.
-- [x] Working with streams, exclusively! No strings.
-    - [x] `get_random_text()` to only return stream
-    - [x] Exclusively work with streams, no more strings.
-    - [x] Reading just 1 byte at a time is rather slow. Can we do this faster? Maybe read a chunk to
-      a buffer (which is then in memory) and then read 1 byte from there each time.
-    - [x] I so don't understand buffering... doesn't Python buffer for me and thus reading just 1
-      byte is fast? Appears that it is slow.
-
-
 ## Resources
 
 -   [Embarrassingly parallel Huffman encoding](http://www.ittc.ku.edu/~jsv/Papers/HoV95.pdcfull.pdf)
