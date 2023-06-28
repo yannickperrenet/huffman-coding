@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "huffman-coding"
+version = "0.1.0"
+description = "TBD"
+authors = ["Yannick Perrenet <yannickperrenet+huffman@gmail.com>"]
+license = "MIT"
+readme = "README.md"
+packages = [{include = "huffman_coding"}]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+
+[tool.poetry.scripts]
+huffman_coding = "huffman_coding.src:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

@@ -34,7 +34,7 @@ class TestEncodingDecoding(unittest.TestCase):
         )
         for parametrization in parametrizations:
             word_size, buffering = parametrization
-            huffman_coding.DECODER_WORD_SIZE = word_size
+            set_decoder_word_size(word_size)
 
             msg = (
                 f"Testing paramatrization: {parametrization}"
@@ -161,6 +161,10 @@ def get_parametrizations(*iterables: list) -> list:
     parametrization = []
     helper(0)
     return ans
+
+
+def set_decoder_word_size(size: int) -> None:
+    huffman_coding.src.DECODER_WORD_SIZE = size  # type: ignore
 
 
 if __name__ == "__main__":

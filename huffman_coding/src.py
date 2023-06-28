@@ -626,5 +626,8 @@ def main():
                 decode(f_in=f_in, f_out=f_out)
 
 
+__all__ = ["decode", "encode"]
+
+
 if __name__ == "__main__":
     main()
