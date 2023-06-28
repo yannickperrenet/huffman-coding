@@ -12,6 +12,7 @@ bottleneck.
 ```sh
 # Get this example
 git clone https://github.com/yannickperrenet/huffman-coding.git && cd huffman-coding
+pip install .
 
 # Be sure to obtain the hamlet.txt example text.
 wget https://gist.githubusercontent.com/provpup/2fc41686eab7400b796b/raw/b575bd01a58494dfddc1d6429ef0167e709abf9b/hamlet.txt -O hamlet.txt

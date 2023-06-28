@@ -1,9 +1,12 @@
 # Huffman coding
 
-The fastest Python implementation for [Huffman coding](https://en.wikipedia.org/wiki/Huffman_coding).
+In summary, its fast, has no dependencies and works with files that don't fit into memory.
 
 Why another implementation you ask?
 
+-   All other Python implementation's of the [Huffman
+    coding](https://en.wikipedia.org/wiki/Huffman_coding) algorithm are written for educational
+    purposes, whereas this package is actually intended to be used.
 -   It can be run as a standalone script because it is a pure Python implementation with no
     additional dependencies outside the standard library.
 -   It works with streams exclusively, in a buffered fashion. Meaning that you can encode and decode
@@ -32,8 +35,6 @@ Why another implementation you ask?
     which essentially "unrolled" the FSM by operating on a byte-level instead of bit-level. I simply
     had to generate a FSM dynamically based on the Huffman code (see `_get_fsm_decoder()`) to be
     able to apply the same principle to non-static Huffman codes.
-
-In summary, its fast, has no dependencies and works with files that don't fit into memory.
 
 
 ## Installation
@@ -109,10 +110,10 @@ decode(f_in=byte_encoding, f_out=decoded_text)
 decoded_text.seek(0)
 ```
 
-## Tests
+## Running tests
 
 Simply run `python3 tests/test_huffman_coding.py` or invoke `unittest` through its CLI `python3 -m
-unittest -vv` (make sure that the python you are running has the package installed, i.e. `pip
+unittest -vv` (make sure that the Python you are running has the package installed, i.e. `pip
 install .` in the root directory of this project).
 
 ## Resources

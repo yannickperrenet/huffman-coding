@@ -1,11 +1,22 @@
 [tool.poetry]
 name = "huffman-coding"
 version = "0.1.0"
-description = "TBD"
+description = "Huffman encoding and decoding of files and streams."
 authors = ["Yannick Perrenet <yannickperrenet+huffman@gmail.com>"]
 license = "MIT"
 readme = "README.md"
+keywords = ["huffman", "FSM", "compression"]
+homepage = "https://github.com/yannickperrenet/huffman-coding"
 packages = [{include = "huffman_coding"}]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Unix",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Utilities",
+]
 
 [tool.poetry.dependencies]
 python = "^3.10"
